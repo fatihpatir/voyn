@@ -1,0 +1,62 @@
+{
+  "name": "VOYN",
+  "short_name": "VOYN",
+  "description": "Bağlan, konuş, paylaş.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#7C3AED",
+  "background_color": "#0F0F0F",
+  "lang": "tr",
+  "categories": ["communication", "social"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Yeni Sohbet",
+      "short_name": "Sohbet",
+      "description": "Yeni bir sohbet başlat",
+      "url": "./?action=new-chat",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Kişi Ara",
+      "short_name": "Ara",
+      "description": "Kişi ara ve bağlan",
+      "url": "./?action=search",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "prefer_related_applications": false
+}

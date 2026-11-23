@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VOYN Icon Generator</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      padding: 40px 20px;
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    p { color: #a0a0a0; font-size: 14px; }
+    canvas { border-radius: 20%; display: block; }
+    .canvas-row { display: flex; gap: 32px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
+    .canvas-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    .label { font-size: 13px; color: #a0a0a0; }
+    .btn {
+      padding: 10px 24px;
+      background: #7C3AED;
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #9D5FF5; }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  </style>
+</head>
+<body>
+  <h1>VOYN Icon Generator</h1>
+  <p>SVG'den 192×192 ve 512×512 PNG ikonlar üret ve indir.</p>
+
+  <div class="canvas-row">
+    <div class="canvas-wrap">
+      <canvas id="canvas192" width="192" height="192"></canvas>
+      <span class="label">192 × 192</span>
+      <button class="btn" onclick="download(192)">İndir (192)</button>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="canvas512" width="512" height="512"></canvas>
+      <span class="label">512 × 512</span>
+      <button class="btn" onclick="download(512)">İndir (512)</button>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" onclick="downloadAll()">Tümünü İndir</button>
+  </div>
+
+  <script>
+    const SVG_CONTENT = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7C3AED;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#5B21B6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#9D5FF5;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="v-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:rgba(255,255,255,0.85);stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#bg-grad)" />
+  <rect width="512" height="512" rx="112" ry="112" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="2" />
+  <text x="256" y="348" font-family="Arial Black, Helvetica Neue, Arial, sans-serif" font-size="280" font-weight="900" text-anchor="middle" fill="url(#v-grad)" letter-spacing="-10">V</text>
+</svg>`;
+
+    function drawToCanvas(size) {
+      return new Promise((resolve) => {
+        const canvasId = `canvas${size}`;
+        const canvas = document.getElementById(canvasId);
+        const ctx = canvas.getContext('2d');
+        const blob = new Blob([SVG_CONTENT], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, size, size);
+          ctx.drawImage(img, 0, 0, size, size);
+          URL.revokeObjectURL(url);
+          resolve(canvas);
+        };
+        img.src = url;
+      });
+    }
+
+    function download(size) {
+      const canvas = document.getElementById(`canvas${size}`);
+      const link = document.createElement('a');
+      link.download = `icon-${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    async function downloadAll() {
+      await drawToCanvas(192);
+      await drawToCanvas(512);
+      download(192);
+      setTimeout(() => download(512), 300);
+    }
+
+    // Auto-render on page load
+    window.addEventListener('load', async () => {
+      await drawToCanvas(192);
+      await drawToCanvas(512);
+    });
+  </script>
+</body>
+</html>

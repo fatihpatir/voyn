@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#7C3AED" />
+  <meta name="description" content="Bağlan, konuş, paylaş." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VOYN" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="msapplication-TileColor" content="#7C3AED" />
+
+  <title>VOYN</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== AUTH SCREEN ===== -->
+  <div id="screen-auth" class="screen active">
+    <div class="auth-bg">
+      <div class="auth-orb auth-orb--1"></div>
+      <div class="auth-orb auth-orb--2"></div>
+      <div class="auth-orb auth-orb--3"></div>
+    </div>
+    <div class="auth-container">
+      <div class="auth-logo">
+        <div class="logo-mark">V</div>
+      </div>
+      <h1 class="auth-title">VOYN</h1>
+      <p class="auth-slogan">Bağlan, konuş, paylaş.</p>
+
+      <form class="auth-form" id="auth-form">
+        <div class="input-group">
+          <input
+            type="text"
+            id="username-input"
+            class="input-field"
+            placeholder="Kullanıcı adın"
+            maxlength="32"
+            autocomplete="username"
+            required
+          />
+          <span class="input-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          </span>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full">
+          <span>Başla</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <p class="auth-note">Hesap gerekmez · Anında başla</p>
+    </div>
+  </div>
+
+  <!-- ===== HOME SCREEN ===== -->
+  <div id="screen-home" class="screen">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="app-logo-sm">V</div>
+        <h2 class="header-title">Sohbetler</h2>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-search-friend" aria-label="Arkadaş Ara">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-new-chat" aria-label="Yeni Sohbet">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="search-bar-wrapper" id="home-search">
+      <div class="search-bar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" placeholder="Sohbet ara…" class="search-input" />
+      </div>
+    </div>
+
+    <div class="chat-list" id="chat-list">
+      <!-- Chat items rendered by JS -->
+      <div class="chat-item" data-chat-id="1">
+        <div class="avatar avatar--online">
+          <span>A</span>
+        </div>
+        <div class="chat-info">
+          <div class="chat-meta">
+            <span class="chat-name">Ahmet Yılmaz</span>
+            <span class="chat-time">14:32</span>
+          </div>
+          <div class="chat-preview">
+            <span class="chat-last-msg">Tamam, yarın görüşürüz 👋</span>
+            <span class="chat-unread badge">3</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-item" data-chat-id="2">
+        <div class="avatar" style="--avatar-color:#059669">
+          <span>M</span>
+        </div>
+        <div class="chat-info">
+          <div class="chat-meta">
+            <span class="chat-name">Merve Kaya</span>
+            <span class="chat-time">12:10</span>
+          </div>
+          <div class="chat-preview">
+            <span class="chat-last-msg">🎵 Ses mesajı</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-item" data-chat-id="3">
+        <div class="avatar" style="--avatar-color:#DC2626">
+          <span>K</span>
+        </div>
+        <div class="chat-info">
+          <div class="chat-meta">
+            <span class="chat-name">Kerim Demir</span>
+            <span class="chat-time">Dün</span>
+          </div>
+          <div class="chat-preview">
+            <span class="chat-last-msg">Sen: Harika görünüyor!</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-item" data-chat-id="4">
+        <div class="avatar" style="--avatar-color:#D97706">
+          <span>Z</span>
+        </div>
+        <div class="chat-info">
+          <div class="chat-meta">
+            <span class="chat-name">Zeynep Arslan</span>
+            <span class="chat-time">Pzt</span>
+          </div>
+          <div class="chat-preview">
+            <span class="chat-last-msg">📎 Fotoğraf</span>
+            <span class="chat-unread badge">1</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="empty-state" id="empty-chats" style="display:none">
+        <div class="empty-icon">💬</div>
+        <p>Henüz sohbet yok.</p>
+        <p class="empty-sub">Yeni birini bulmak için ara butonuna dokun.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== CHAT SCREEN ===== -->
+  <div id="screen-chat" class="screen">
+    <header class="app-header chat-header">
+      <button class="icon-btn" id="btn-chat-back">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="chat-header-info">
+        <div class="avatar avatar--sm avatar--online" id="chat-avatar">
+          <span id="chat-avatar-letter">A</span>
+        </div>
+        <div>
+          <div class="chat-header-name" id="chat-partner-name">Ahmet Yılmaz</div>
+          <div class="chat-header-status">çevrimiçi</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" id="btn-voice-call" aria-label="Sesli Ara">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.9 13.5 19.79 19.79 0 0 1 1.9 4.86 2 2 0 0 1 3.9 2.69h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 10.1a16 16 0 0 0 5.91 5.91l1.5-1.5a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-video-call" aria-label="Görüntülü Ara">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="messages-container" id="messages-container">
+      <div class="date-divider"><span>Bugün</span></div>
+
+      <div class="message message--in">
+        <div class="msg-avatar"><span>A</span></div>
+        <div class="msg-content">
+          <div class="msg-bubble">Merhaba! Nasılsın? 😊</div>
+          <div class="msg-time">14:30</div>
+        </div>
+      </div>
+
+      <div class="message message--out">
+        <div class="msg-content">
+          <div class="msg-bubble">İyiyim, teşekkürler! Sen nasılsın?</div>
+          <div class="msg-time msg-time--out">14:31 <span class="msg-status">✓✓</span></div>
+        </div>
+      </div>
+
+      <div class="message message--in">
+        <div class="msg-avatar"><span>A</span></div>
+        <div class="msg-content">
+          <div class="msg-bubble">Çok iyiyim! Yarın buluşalım mı?</div>
+          <div class="msg-time">14:32</div>
+        </div>
+      </div>
+
+      <div class="message message--out">
+        <div class="msg-content">
+          <div class="msg-bubble">Tabii ki! Saat 15:00 olur mu?</div>
+          <div class="msg-time msg-time--out">14:33 <span class="msg-status">✓✓</span></div>
+        </div>
+      </div>
+
+      <div class="message message--in">
+        <div class="msg-avatar"><span>A</span></div>
+        <div class="msg-content">
+          <div class="msg-bubble">Tamam, yarın görüşürüz 👋</div>
+          <div class="msg-time">14:32</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <button class="icon-btn attach-btn" id="btn-attach" aria-label="Dosya Ekle">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <div class="msg-input-wrapper">
+        <input type="text" class="msg-input" id="msg-input" placeholder="Mesaj yaz…" />
+      </div>
+      <button class="icon-btn voice-btn" id="btn-voice" aria-label="Sesli Mesaj">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+      </button>
+      <button class="icon-btn send-btn" id="btn-send" aria-label="Gönder">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== CALL SCREEN ===== -->
+  <div id="screen-call" class="screen">
+    <div class="call-bg">
+      <div class="call-orb"></div>
+    </div>
+    <div class="call-container">
+      <div class="call-info">
+        <div class="call-avatar" id="call-avatar">
+          <span id="call-avatar-letter">A</span>
+        </div>
+        <h2 class="call-name" id="call-name">Ahmet Yılmaz</h2>
+        <p class="call-status" id="call-status">Bağlanıyor…</p>
+      </div>
+
+      <!-- Video call area -->
+      <div class="call-video-area" id="call-video-area" style="display:none">
+        <div class="remote-video" id="remote-video">
+          <div class="video-placeholder">📹</div>
+        </div>
+        <div class="local-video" id="local-video">
+          <div class="video-placeholder-sm">🤳</div>
+        </div>
+      </div>
+
+      <div class="call-controls">
+        <button class="call-btn call-btn--mute" id="btn-mute" aria-label="Sesi Kapat">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        </button>
+        <button class="call-btn call-btn--end" id="btn-end-call" aria-label="Aramayı Kapat">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c1.12.47 2.33.74 3.57.74A2 2 0 0 1 23 17v3a2 2 0 0 1-2 2 20.3 20.3 0 0 1-8.73-1.95A20.08 20.08 0 0 1 2 12 2 2 0 0 1 4 10h3a2 2 0 0 1 2 1.72c.05.52.14 1.04.26 1.54a2 2 0 0 1-.45 2.11l-.13.14z" transform="rotate(135,12,12)"/></svg>
+        </button>
+        <button class="call-btn call-btn--speaker" id="btn-speaker" aria-label="Hoparlör">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== PROFILE SCREEN ===== -->
+  <div id="screen-profile" class="screen">
+    <header class="app-header">
+      <h2 class="header-title">Profil</h2>
+      <button class="icon-btn" id="btn-settings" aria-label="Ayarlar">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </header>
+
+    <div class="profile-container">
+      <div class="profile-hero">
+        <div class="profile-avatar" id="profile-avatar">
+          <span id="profile-avatar-letter">?</span>
+          <button class="avatar-edit-btn" aria-label="Fotoğraf Değiştir">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </button>
+        </div>
+        <h2 class="profile-name" id="profile-name">Kullanıcı Adı</h2>
+        <p class="profile-id">@<span id="profile-username">kullaniciadi</span></p>
+      </div>
+
+      <div class="settings-list">
+        <div class="settings-section">
+          <div class="settings-label">Görünüm</div>
+          <div class="settings-item">
+            <div class="settings-item-left">
+              <span class="settings-icon">🌙</span>
+              <span>Karanlık Tema</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="theme-toggle" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Bildirimler</div>
+          <div class="settings-item">
+            <div class="settings-item-left">
+              <span class="settings-icon">🔔</span>
+              <span>Mesaj Bildirimleri</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="notif-toggle" checked />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="settings-item">
+            <div class="settings-item-left">
+              <span class="settings-icon">📳</span>
+              <span>Titreşim</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="vibrate-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-label">Gizlilik</div>
+          <div class="settings-item settings-item--link">
+            <div class="settings-item-left">
+              <span class="settings-icon">🔒</span>
+              <span>Çevrimiçi Durumu</span>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+          </div>
+          <div class="settings-item settings-item--link">
+            <div class="settings-item-left">
+              <span class="settings-icon">🛡️</span>
+              <span>Engellenen Kişiler</span>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-item settings-item--danger">
+            <div class="settings-item-left">
+              <span class="settings-icon">🚪</span>
+              <span>Çıkış Yap</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== BOTTOM NAV ===== -->
+  <nav class="bottom-nav" id="bottom-nav">
+    <button class="nav-item active" data-screen="home" aria-label="Sohbetler">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span>Sohbetler</span>
+    </button>
+    <button class="nav-item" data-screen="calls" aria-label="Aramalar">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.9 13.5 19.79 19.79 0 0 1 1.9 4.86 2 2 0 0 1 3.9 2.69h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 10.1a16 16 0 0 0 5.91 5.91l1.5-1.5a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+      <span>Ara</span>
+    </button>
+    <button class="nav-item" data-screen="profile" aria-label="Profil">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      <span>Profil</span>
+    </button>
+  </nav>
+
+  <!-- ===== MODAL: FRIEND SEARCH ===== -->
+  <div class="modal-overlay" id="modal-friend-search" role="dialog" aria-modal="true" aria-label="Arkadaş Ara">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <h3 class="modal-title">Kişi Ara</h3>
+      <div class="search-bar modal-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" placeholder="Kullanıcı adı ile ara…" class="search-input" id="friend-search-input" />
+      </div>
+      <div class="friend-search-results" id="friend-search-results">
+        <div class="search-hint">Kullanıcı adı girerek arama yapın.</div>
+      </div>
+      <button class="modal-close-btn" id="btn-close-friend-search">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== MODAL: INCOMING CALL ===== -->
+  <div class="modal-overlay call-overlay" id="modal-incoming-call" role="dialog" aria-modal="true" aria-label="Gelen Arama">
+    <div class="incoming-call-card">
+      <div class="incoming-call-avatar" id="incoming-call-avatar">
+        <span id="incoming-call-letter">A</span>
+        <div class="ring-animation"></div>
+      </div>
+      <h3 class="incoming-call-name" id="incoming-call-name">Ahmet Yılmaz</h3>
+      <p class="incoming-call-type" id="incoming-call-type">Sesli Arama</p>
+      <div class="incoming-call-actions">
+        <button class="call-action-btn call-action-btn--decline" id="btn-decline-call" aria-label="Reddet">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <button class="call-action-btn call-action-btn--accept" id="btn-accept-call" aria-label="Kabul Et">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.9 13.5 19.79 19.79 0 0 1 1.9 4.86 2 2 0 0 1 3.9 2.69h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 10.1a16 16 0 0 0 5.91 5.91l1.5-1.5a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /#app -->
+
+<!-- ===== FOOTER ===== -->
+<footer class="app-footer">
+  <a href="https://fatihpatir.github.io/web" target="_blank" rel="noopener noreferrer" class="footer-link">Fatih PATIR</a>
+</footer>
+
+<!-- Supabase JS Client -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<!-- VOYN Core Modules -->
+<script src="js/config.js"></script>
+<script src="js/db.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/messaging.js"></script>
+<script src="js/friends.js"></script>
+<script src="js/webrtc.js"></script>
+<script src="js/push.js"></script>
+<script src="js/app.js"></script>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((err) => {
+        console.warn('SW kayıt uyarısı:', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
