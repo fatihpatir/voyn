@@ -1,26 +1,22 @@
 /**
- * VOYN App — Ana uygulama kontrolcüsü
- * Tüm modülleri yönetir, ekran navigasyonunu ve UI güncelleme mantığını içerir.
+ * VOYN App — Ana Uygulama Kontrolcüsü
+ * Ekranlar, navigasyon, kişi arama, anlık sohbet ve WebRTC entegrasyonu
  */
 
 class VoynApp {
   constructor() {
-    // Modül örnekleri (init() sonrası dolu olur)
     this.db = null;
     this.auth = null;
     this.messaging = null;
     this.friends = null;
-    this.webrtc = null;         // js/webrtc.js tarafından sağlanır
-    this.push = null;           // sw.js tarafından yönetilir
+    this.webrtc = null;
+    this.push = null;
 
-    // UI durumu
     this._activeScreen = null;
     this._activeConversationId = null;
     this._activeContactId = null;
     this._theme = localStorage.getItem('voyn_theme') || 'dark';
     this._toastTimer = null;
-
-    // Supabase istemcisi (config değerlerinden)
     this.supabase = null;
   }
 
@@ -28,35 +24,32 @@ class VoynApp {
 
   async init() {
     try {
-      // Supabase istemcisi oluştur
+      // 1. Supabase İstemcisi
       this.supabase = supabase.createClient(
         VOYN_CONFIG.SUPABASE_URL,
         VOYN_CONFIG.SUPABASE_ANON_KEY
       );
 
-      // IndexedDB
+      // 2. IndexedDB
       this.db = new VoynDB();
       await this.db.init();
 
-      // Auth
+      // 3. Modüller
       this.auth = new VoynAuth(this.supabase, this.db);
-
-      // Messaging & Friends (auth sonrası)
-      this.messaging = new VoynMessaging(this.supabase, this.db, this.auth);
       this.friends = new VoynFriends(this.supabase, this.db, this.auth);
+      this.messaging = new VoynMessaging(this.supabase, this.db, this.auth);
 
-      // WebRTC — opsiyonel (voyn_webrtc global'ı varsa)
       if (typeof VoynWebRTC !== 'undefined') {
         this.webrtc = new VoynWebRTC(this.supabase, this.auth);
       }
 
-      // Tema uygula
+      // 4. Tema
       this._applyTheme(this._theme);
 
-      // Olay dinleyicilerini bağla
+      // 5. Olay Dinleyicileri
       this._bindEvents();
 
-      // Otomatik giriş dene
+      // 6. Giriş Kontrolü
       const user = await this.auth.autoLogin();
       if (user) {
         await this._onLoggedIn(user);
@@ -64,61 +57,33 @@ class VoynApp {
         this.showScreen('auth');
       }
 
-      // Service Worker kaydı
+      // 7. Service Worker
       this._registerServiceWorker();
-
-      console.log('[VoynApp] Initialized');
     } catch (err) {
-      console.error('[VoynApp] Init error:', err);
-      this._showError('Uygulama başlatılırken bir hata oluştu. Sayfayı yenileyin.');
+      console.error('[VoynApp] Başlatma hatası:', err);
+      this.showScreen('auth');
     }
   }
 
-  // ─── Post-login setup ─────────────────────────────────────────────────────
-
   async _onLoggedIn(user) {
-    // Realtime dinlemeyi başlat
-    await this.messaging.startListening();
-
-    // Arkadaşları yükle
-    await this.friends.init();
-
-    // Varlık heartbeat
+    console.log('[VoynApp] Giriş yapıldı:', user.username);
     this.auth.startPresenceHeartbeat();
+    await this.messaging.startListening();
+    this.messaging.onMessage((msg) => {
+      if (this._activeScreen === 'chat' && this._activeConversationId === msg.conversationId) {
+        this.renderMessageList(msg.conversationId);
+      } else {
+        this.renderConversationList();
+        this._showToast(`Yeni mesaj: ${msg.content || 'Dosya'}`, 'info');
+      }
+    });
 
-    // Gelen mesaj dinleyicisi
-    this.messaging.onMessage((msg) => this._handleIncomingMessage(msg));
-    this.messaging.onStatusChange(({ messageId, status }) =>
-      this._updateMessageStatusUI(messageId, status)
-    );
-
-    // Arkadaşlık isteği dinleyicisi
-    this.friends.onFriendRequest((req) => this._handleFriendRequest(req));
-
-    // Presence
-    const friendIds = (await this.friends.getFriendsList()).map((f) => f.id);
-    if (friendIds.length > 0) {
-      this.friends.subscribeToPresence(friendIds);
-      this.friends.onPresenceChange((userId, presence) =>
-        this._updatePresenceUI(userId, presence)
-      );
-    }
-
-    // Çevrimdışı kuyruğu boşalt
-    await this.messaging.flushOfflineQueue();
-
-    // Ana ekrana geç ve konuşma listesini yükle
     this.showScreen('home');
     await this.renderConversationList();
   }
 
-  // ─── Screen Navigation ────────────────────────────────────────────────────
+  // ─── Ekran Navigasyonu ───────────────────────────────────────────────────
 
-  /**
-   * Ekranı göster
-   * @param {'auth'|'home'|'chat'|'call'|'profile'} name
-   * @param {object} [params] - ekrana ait veriler
-   */
   showScreen(name, params = {}) {
     const screens = document.querySelectorAll('[id^="screen-"]');
     screens.forEach((s) => {
@@ -128,7 +93,7 @@ class VoynApp {
 
     const target = document.getElementById(`screen-${name}`);
     if (!target) {
-      console.warn('[VoynApp] Screen not found:', name);
+      console.warn('[VoynApp] Ekran bulunamadı:', name);
       return;
     }
 
@@ -136,72 +101,53 @@ class VoynApp {
     target.setAttribute('aria-hidden', 'false');
     this._activeScreen = name;
 
-    // Ekrana özgü setup
-    if (name === 'chat' && params.conversationId) {
-      this._activeConversationId = params.conversationId;
-      this._activeContactId = params.contactId;
-      this.renderChatScreen(params.conversationId, params.contact);
-    }
-
-    if (name === 'profile') {
-      this.renderProfileScreen();
-    }
-
-    if (name === 'home') {
-      this.renderConversationList();
-    }
-
-    // Alt nav aktif durumunu güncelle
+    // Alt navigasyon aktif durumu
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.classList.toggle('active', item.dataset.screen === name);
     });
-  }
 
-  hideScreen(name) {
-    const target = document.getElementById(`screen-${name}`);
-    if (target) {
-      target.classList.remove('active');
-      target.setAttribute('aria-hidden', 'true');
+    if (name === 'home') {
+      this.renderConversationList();
+    } else if (name === 'chat' && params.conversationId) {
+      this._activeConversationId = params.conversationId;
+      this._activeContactId = params.contactId;
+      this.renderChatScreen(params.conversationId, params.contact);
+    } else if (name === 'profile') {
+      this.renderProfileScreen();
     }
-    if (this._activeScreen === name) this._activeScreen = null;
   }
 
-  // ─── Conversation List ────────────────────────────────────────────────────
+  // ─── Konuşma & Sohbet Listesi ────────────────────────────────────────────
 
   async renderConversationList() {
-    const listEl = document.getElementById('conversation-list');
+    const listEl = document.getElementById('chat-list') || document.getElementById('conversation-list');
     if (!listEl) return;
 
     const conversations = await this.db.getAllConversations();
-    if (conversations.length === 0) {
+    if (!conversations || conversations.length === 0) {
       listEl.innerHTML = `
-        <div class="empty-state">
-          <span class="empty-icon">💬</span>
-          <p>Henüz konuşma yok</p>
-          <p class="empty-hint">Arkadaşlarını ara ve mesaj at!</p>
+        <div class="empty-state" id="empty-chats">
+          <div class="empty-icon">💬</div>
+          <p>Henüz sohbet yok.</p>
+          <p class="empty-sub">Yeni birini bulup sohbet etmek için yukarıdaki 🔍 butonuna dokunun.</p>
         </div>`;
       return;
     }
 
-    const user = this.auth.getCurrentUser();
-
-    // Her konuşma için karşı tarafın profilini getir
+    const currentUser = this.auth.getCurrentUser();
     const items = await Promise.all(
       conversations.map(async (conv) => {
-        const otherId = conv.participantIds.find((id) => id !== user.id);
-        const contact = await this.db.getUser(otherId) || { id: otherId, username: 'Bilinmeyen' };
-        const friend = this.friends.getFriendById(otherId);
-        const isOnline = friend?.isOnline || false;
-        return { conv, contact, isOnline };
+        const otherId = (conv.participantIds || []).find((id) => id !== currentUser?.id);
+        let contact = (await this.db.getUser(otherId)) || { id: otherId, username: 'Kullanıcı' };
+        return { conv, contact };
       })
     );
 
     listEl.innerHTML = items
-      .map(({ conv, contact, isOnline }) => this._conversationItemHTML(conv, contact, isOnline))
+      .map(({ conv, contact }) => this._conversationItemHTML(conv, contact))
       .join('');
 
-    // Konuşma öğelerine tıklama ekle
-    listEl.querySelectorAll('.conversation-item').forEach((el) => {
+    listEl.querySelectorAll('.chat-item').forEach((el) => {
       el.addEventListener('click', () => {
         const { conversationId, contactId } = el.dataset;
         this._openConversation(conversationId, contactId);
@@ -209,103 +155,108 @@ class VoynApp {
     });
   }
 
-  _conversationItemHTML(conv, contact, isOnline) {
+  _conversationItemHTML(conv, contact) {
     const lastMsg = conv.lastMessage;
     const preview = lastMsg
       ? lastMsg.type === 'text'
         ? this._escapeHtml(lastMsg.content || '')
         : `📎 ${lastMsg.type === 'image' ? 'Fotoğraf' : lastMsg.type === 'voice' ? 'Sesli mesaj' : 'Dosya'}`
-      : '';
-    const time = lastMsg
-      ? this._formatTime(lastMsg.createdAt)
-      : '';
-    const unread = conv.unreadCount > 0
-      ? `<span class="unread-badge">${conv.unreadCount > 99 ? '99+' : conv.unreadCount}</span>`
-      : '';
+      : 'Sohbet başladı';
+
+    const time = lastMsg ? this._formatTime(lastMsg.createdAt) : '';
+    const unread = conv.unreadCount > 0 ? `<span class="chat-unread badge">${conv.unreadCount}</span>` : '';
     const avatarLetter = (contact.username || '?')[0].toUpperCase();
     const avatarImg = contact.avatarUrl
-      ? `<img src="${this._escapeHtml(contact.avatarUrl)}" alt="${this._escapeHtml(contact.username)}" />`
-      : `<span class="avatar-letter">${avatarLetter}</span>`;
+      ? `<img src="${this._escapeHtml(contact.avatarUrl)}" alt="" class="avatar-img" />`
+      : `<span>${avatarLetter}</span>`;
 
     return `
-      <div class="conversation-item" data-conversation-id="${conv.id}" data-contact-id="${contact.id}" role="button" tabindex="0">
-        <div class="avatar ${isOnline ? 'online' : ''}">
+      <div class="chat-item" data-conversation-id="${conv.id}" data-contact-id="${contact.id}">
+        <div class="avatar ${contact.isOnline ? 'avatar--online' : ''}">
           ${avatarImg}
-          ${isOnline ? '<span class="presence-dot"></span>' : ''}
         </div>
-        <div class="conv-info">
-          <div class="conv-header">
-            <span class="conv-name">${this._escapeHtml(contact.username)}</span>
-            <span class="conv-time">${time}</span>
+        <div class="chat-info">
+          <div class="chat-meta">
+            <span class="chat-name">${this._escapeHtml(contact.displayName || contact.username)}</span>
+            <span class="chat-time">${time}</span>
           </div>
-          <div class="conv-footer">
-            <span class="conv-preview">${preview}</span>
+          <div class="chat-preview">
+            <span class="chat-last-msg">${preview}</span>
             ${unread}
           </div>
         </div>
       </div>`;
   }
 
-  async _openConversation(conversationId, contactId) {
-    const contact = await this.db.getUser(contactId);
+  async _openConversation(conversationId, contactId, contactObj = null) {
+    let contact = contactObj;
+    if (!contact) {
+      contact = await this.db.getUser(contactId);
+    }
+    if (!contact) {
+      const { data } = await this.supabase
+        .from('users')
+        .select('id, username, display_name, avatar_url, is_online, last_seen')
+        .eq('id', contactId)
+        .single();
+      if (data) {
+        contact = {
+          id: data.id,
+          username: data.username,
+          displayName: data.display_name || data.username,
+          avatarUrl: data.avatar_url,
+          isOnline: data.is_online,
+          lastSeen: data.last_seen,
+        };
+        await this.db.saveUser(contact);
+      }
+    }
+
+    this._activeConversationId = conversationId;
+    this._activeContactId = contactId;
     this.showScreen('chat', { conversationId, contactId, contact });
   }
 
-  // ─── Chat Screen ──────────────────────────────────────────────────────────
+  // ─── Sohbet Ekranı ───────────────────────────────────────────────────────
 
   async renderChatScreen(conversationId, contact) {
-    // Başlık
-    const headerName = document.getElementById('chat-header-name');
-    const headerAvatar = document.getElementById('chat-header-avatar');
-    const headerStatus = document.getElementById('chat-header-status');
+    const headerName = document.getElementById('chat-partner-name');
+    const avatarLetter = document.getElementById('chat-avatar-letter');
+    const headerStatus = document.getElementById('chat-partner-status');
 
     if (contact) {
-      if (headerName) headerName.textContent = contact.username || 'Kullanıcı';
-      if (headerAvatar) {
-        headerAvatar.innerHTML = contact.avatarUrl
-          ? `<img src="${this._escapeHtml(contact.avatarUrl)}" alt="${this._escapeHtml(contact.username)}" />`
-          : `<span class="avatar-letter">${(contact.username || '?')[0].toUpperCase()}</span>`;
-      }
+      if (headerName) headerName.textContent = contact.displayName || contact.username || 'Kullanıcı';
+      if (avatarLetter) avatarLetter.textContent = (contact.username || '?')[0].toUpperCase();
       if (headerStatus) {
-        const friend = this.friends.getFriendById(contact.id);
-        headerStatus.textContent = friend?.isOnline
-          ? 'çevrimiçi'
-          : friend?.lastSeen
-          ? `son görülme: ${this._formatTime(friend.lastSeen)}`
-          : '';
+        headerStatus.textContent = contact.isOnline ? '🟢 çevrimiçi' : 'çevrimdışı';
       }
     }
 
-    // Yerel mesajları yükle, sonra sunucudan güncelle
     await this.renderMessageList(conversationId);
 
-    // Okundu bildirimi gönder
-    await this.messaging.markConversationRead(conversationId);
-    await this.renderConversationList(); // unread sayısını güncelle
-
-    // Sunucudan geçmiş yükle (arka planda)
+    // Arka planda sunucudan geçmişi çek
     this.messaging.loadHistory(conversationId).then(() => {
       this.renderMessageList(conversationId);
-    }).catch(console.error);
+    }).catch(() => {});
   }
 
   async renderMessageList(conversationId) {
-    const listEl = document.getElementById('message-list');
+    const listEl = document.getElementById('messages-container') || document.getElementById('message-list');
     if (!listEl) return;
 
-    const user = this.auth.getCurrentUser();
-    const messages = await this.db.getMessages(conversationId, {
-      limit: VOYN_CONFIG.MESSAGES_PER_PAGE,
-    });
+    const currentUser = this.auth.getCurrentUser();
+    const messages = await this.db.getMessages(conversationId, { limit: 100 });
 
-    if (messages.length === 0) {
-      listEl.innerHTML = `<div class="empty-messages"><p>Henüz mesaj yok. İlk mesajı sen at! 👋</p></div>`;
+    if (!messages || messages.length === 0) {
+      listEl.innerHTML = `
+        <div class="empty-state" id="empty-messages" style="margin:auto;">
+          <p class="empty-sub">Sohbeti başlatmak için bir mesaj yazın 👋</p>
+        </div>`;
       return;
     }
 
-    listEl.innerHTML = messages.map((msg) => this._messageHTML(msg, user.id)).join('');
+    listEl.innerHTML = messages.map((msg) => this._messageHTML(msg, currentUser ? currentUser.id : '')).join('');
 
-    // Sona kaydır
     requestAnimationFrame(() => {
       listEl.scrollTop = listEl.scrollHeight;
     });
@@ -313,140 +264,282 @@ class VoynApp {
 
   _messageHTML(msg, myUserId) {
     const isMine = msg.fromUserId === myUserId;
-    const statusIcon = isMine ? this._statusIcon(msg.status) : '';
+    const statusIcon = isMine ? (msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : '✓') : '';
     const time = this._formatTime(msg.createdAt);
+    const letter = (msg.fromUsername || '?')[0].toUpperCase();
 
     let contentHTML = '';
     switch (msg.type) {
       case 'text':
-        contentHTML = `<p class="msg-text">${this._escapeHtml(msg.content || '')}</p>`;
+        contentHTML = `<div class="msg-bubble">${this._escapeHtml(msg.content || '')}</div>`;
         break;
       case 'image':
         contentHTML = msg.url
-          ? `<img class="msg-image" src="${this._escapeHtml(msg.url)}" alt="Fotoğraf" loading="lazy" />`
-          : `<p class="msg-text msg-loading">📷 Fotoğraf yükleniyor…</p>`;
-        break;
-      case 'video':
-        contentHTML = msg.url
-          ? `<video class="msg-video" src="${this._escapeHtml(msg.url)}" controls preload="metadata"></video>`
-          : `<p class="msg-text msg-loading">🎬 Video yükleniyor…</p>`;
-        break;
-      case 'voice':
-        contentHTML = msg.url
-          ? `<div class="msg-voice">
-               <button class="play-voice-btn" data-src="${this._escapeHtml(msg.url)}">▶</button>
-               <div class="voice-waveform"></div>
-             </div>`
-          : `<p class="msg-text msg-loading">🎤 Sesli mesaj yükleniyor…</p>`;
+          ? `<div class="msg-bubble" style="padding:4px;"><img src="${this._escapeHtml(msg.url)}" alt="Fotoğraf" style="max-width:220px;border-radius:12px;" loading="lazy" /></div>`
+          : `<div class="msg-bubble">📷 Fotoğraf yükleniyor…</div>`;
         break;
       case 'file':
-        contentHTML = msg.url
-          ? `<a class="msg-file" href="${this._escapeHtml(msg.url)}" target="_blank" rel="noopener noreferrer" download="${this._escapeHtml(msg.fileName || 'dosya')}">
-               📎 ${this._escapeHtml(msg.fileName || 'Dosya')}
-               <span class="file-size">${this._formatBytes(msg.fileSize)}</span>
-             </a>`
-          : `<p class="msg-text msg-loading">📎 Dosya yükleniyor…</p>`;
+        contentHTML = `<div class="msg-bubble"><a href="${this._escapeHtml(msg.url || '#')}" target="_blank" download style="color:inherit;text-decoration:underline;">📎 ${this._escapeHtml(msg.fileName || 'Dosya')}</a></div>`;
+        break;
+      case 'voice':
+        contentHTML = `<div class="msg-bubble"><audio controls src="${this._escapeHtml(msg.url || '')}" style="height:36px;max-width:200px;"></audio></div>`;
         break;
       default:
-        contentHTML = `<p class="msg-text msg-system">${this._escapeHtml(msg.content || '')}</p>`;
+        contentHTML = `<div class="msg-bubble">${this._escapeHtml(msg.content || '')}</div>`;
     }
 
     return `
-      <div class="message ${isMine ? 'mine' : 'theirs'}" data-message-id="${msg.id}" data-type="${msg.type}">
-        <div class="msg-bubble">
+      <div class="message ${isMine ? 'message--out' : 'message--in'}">
+        ${!isMine ? `<div class="msg-avatar"><span>${letter}</span></div>` : ''}
+        <div class="msg-content">
           ${contentHTML}
-          <div class="msg-meta">
-            <span class="msg-time">${time}</span>
-            ${statusIcon}
-          </div>
+          <div class="msg-time ${isMine ? 'msg-time--out' : ''}">${time} ${statusIcon}</div>
         </div>
       </div>`;
   }
 
-  _statusIcon(status) {
-    switch (status) {
-      case 'sending':  return '<span class="msg-status sending" title="Gönderiliyor">⏳</span>';
-      case 'queued':   return '<span class="msg-status queued" title="Beklemede">🕐</span>';
-      case 'sent':     return '<span class="msg-status sent" title="Gönderildi">✓</span>';
-      case 'delivered':return '<span class="msg-status delivered" title="Teslim edildi">✓✓</span>';
-      case 'read':     return '<span class="msg-status read" title="Okundu">✓✓</span>';
-      case 'failed':   return '<span class="msg-status failed" title="Gönderilemedi">✗</span>';
-      default:         return '';
+  // ─── Mesaj Gönderme ───────────────────────────────────────────────────────
+
+  async _handleSendMessage() {
+    const input = document.getElementById('msg-input') || document.getElementById('message-input');
+    if (!input || !this._activeContactId) return;
+
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.value = '';
+
+    const emptyHint = document.getElementById('empty-messages');
+    if (emptyHint) emptyHint.style.display = 'none';
+
+    try {
+      await this.messaging.sendMessage(this._activeContactId, text, 'text');
+      await this.renderMessageList(this._activeConversationId);
+      await this.renderConversationList();
+    } catch (err) {
+      this._showError('Mesaj gönderilemedi: ' + err.message);
     }
   }
 
-  _updateMessageStatusUI(messageId, status) {
-    const el = document.querySelector(`[data-message-id="${messageId}"] .msg-status`);
-    if (!el) return;
-    el.outerHTML = this._statusIcon(status);
+  async _handleFileAttach(event) {
+    const file = event.target.files[0];
+    if (!file || !this._activeContactId) return;
+    event.target.value = '';
+
+    const type = file.type.startsWith('image/')
+      ? 'image'
+      : file.type.startsWith('video/')
+      ? 'video'
+      : 'file';
+
+    this._showToast('Dosya gönderiliyor…', 'info');
+
+    try {
+      await this.messaging.sendMessage(this._activeContactId, file, type, {
+        fileName: file.name,
+        fileSize: file.size,
+      });
+      await this.renderMessageList(this._activeConversationId);
+      await this.renderConversationList();
+    } catch (err) {
+      this._showError('Dosya yüklenemedi: ' + err.message);
+    }
   }
 
-  // ─── Profile Screen ───────────────────────────────────────────────────────
+  // ─── Kişi Arama ve Ekleme ────────────────────────────────────────────────
+
+  async _handleUserSearch(query) {
+    const resultsEl = document.getElementById('friend-search-results') || document.getElementById('search-results');
+    if (!resultsEl) return;
+
+    query = (query || '').trim();
+    if (!query) {
+      resultsEl.innerHTML = '<div class="search-hint">Kullanıcı adı girerek arama yapın.</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = '<div class="search-hint">Aranıyor…</div>';
+
+    try {
+      const users = await this.friends.searchUser(query);
+      if (!users || users.length === 0) {
+        resultsEl.innerHTML = '<div class="search-hint">Kullanıcı bulunamadı.</div>';
+        return;
+      }
+
+      resultsEl.innerHTML = users
+        .map((u) => {
+          const letter = (u.username || '?')[0].toUpperCase();
+          const avatarHtml = u.avatarUrl
+            ? `<img src="${this._escapeHtml(u.avatarUrl)}" alt="" class="avatar-img" />`
+            : `<span>${letter}</span>`;
+
+          return `
+            <div class="search-user-item" data-user-id="${u.id}">
+              <div class="search-user-left">
+                <div class="avatar avatar--sm ${u.isOnline ? 'avatar--online' : ''}">
+                  ${avatarHtml}
+                </div>
+                <div>
+                  <div class="search-user-name">${this._escapeHtml(u.displayName || u.username)}</div>
+                  <div class="search-user-status">${u.isOnline ? '🟢 çevrimiçi' : 'çevrimdışı'}</div>
+                </div>
+              </div>
+              <button class="btn-start-chat" data-user-id="${u.id}">
+                Sohbet Et
+              </button>
+            </div>`;
+        })
+        .join('');
+
+      resultsEl.querySelectorAll('.btn-start-chat').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const userId = btn.dataset.userId;
+          const userObj = users.find((u) => u.id === userId);
+          if (userObj) {
+            await this.startChatWithUser(userObj);
+          }
+        });
+      });
+    } catch (err) {
+      resultsEl.innerHTML = `<div class="search-hint" style="color:var(--color-danger)">Hata: ${this._escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async startChatWithUser(targetUser) {
+    try {
+      this._showToast(`${targetUser.username} ile sohbet açılıyor…`, 'info');
+
+      // 1. Arkadaş olarak kaydet
+      await this.friends.addFriend(targetUser);
+
+      // 2. Modalı kapat
+      const modal = document.getElementById('modal-friend-search') || document.getElementById('search-modal');
+      if (modal) modal.classList.remove('open');
+
+      // 3. Konuşmayı aç
+      const currentUser = this.auth.getCurrentUser();
+      const convId = this.messaging._getConversationId(currentUser.id, targetUser.id);
+      await this._openConversation(convId, targetUser.id, targetUser);
+      await this.renderConversationList();
+    } catch (err) {
+      this._showError('Sohbet başlatılamadı: ' + err.message);
+    }
+  }
+
+  // ─── Profil Ekranı ────────────────────────────────────────────────────────
 
   renderProfileScreen() {
     const user = this.auth.getCurrentUser();
     if (!user) return;
 
-    const usernameEl = document.getElementById('profile-username');
-    const avatarEl = document.getElementById('profile-avatar');
-    const bioEl = document.getElementById('profile-bio');
+    const nameEl = document.getElementById('profile-name');
+    const userEl = document.getElementById('profile-username');
+    const letterEl = document.getElementById('profile-avatar-letter');
 
-    if (usernameEl) usernameEl.textContent = user.username || '';
-    if (bioEl) bioEl.textContent = user.bio || '';
-    if (avatarEl) {
-      avatarEl.innerHTML = user.avatar_url
-        ? `<img src="${this._escapeHtml(user.avatar_url)}" alt="${this._escapeHtml(user.username)}" />`
-        : `<span class="avatar-letter avatar-large">${(user.username || '?')[0].toUpperCase()}</span>`;
-    }
-
-    // Tema butonu
-    const themeToggle = document.getElementById('theme-toggle');
-    if (themeToggle) {
-      themeToggle.checked = this._theme === 'light';
-    }
+    if (nameEl) nameEl.textContent = user.username;
+    if (userEl) userEl.textContent = user.username;
+    if (letterEl) letterEl.textContent = (user.username || '?')[0].toUpperCase();
   }
 
-  // ─── Event Listeners ──────────────────────────────────────────────────────
+  // ─── Olay Dinleyicileri ───────────────────────────────────────────────────
 
   _bindEvents() {
-    // Alt navigasyon
+    // Kişi Arama Modalı Açma / Kapama fonksiyonları
+    const openSearchModal = () => {
+      const modal = document.getElementById('modal-friend-search');
+      if (modal) {
+        modal.classList.add('open');
+        const input = document.getElementById('friend-search-input');
+        if (input) {
+          input.value = '';
+          input.focus();
+          this._handleUserSearch('');
+        }
+      }
+    };
+
+    const closeSearchModal = () => {
+      const modal = document.getElementById('modal-friend-search');
+      if (modal) modal.classList.remove('open');
+    };
+
+    // 1. Alt Navigasyon
     document.querySelectorAll('.nav-item').forEach((item) => {
       item.addEventListener('click', () => {
+        const action = item.dataset.action;
         const screen = item.dataset.screen;
+
+        if (action === 'search') {
+          openSearchModal();
+          return;
+        }
+
         if (screen) this.showScreen(screen);
       });
     });
 
-    // Auth form gönder
+    // 2. Auth Form
     const authForm = document.getElementById('auth-form');
     if (authForm) {
-      authForm.addEventListener('submit', (e) => {
+      authForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        this._handleAuthSubmit();
+        const input = document.getElementById('username-input');
+        if (!input) return;
+        const username = input.value.trim();
+        if (!username) return;
+
+        try {
+          const user = await this.auth.createAccount(username);
+          await this._onLoggedIn(user);
+        } catch (err) {
+          this._showError(err.message || 'Giriş yapılamadı');
+        }
       });
     }
 
-    // Kullanıcı adı giriş — gerçek zamanlı doğrulama
-    const usernameInput = document.getElementById('username-input');
-    if (usernameInput) {
-      let debounceTimer;
-      usernameInput.addEventListener('input', () => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => this._validateUsernameInput(usernameInput.value), 400);
+    // 3. Kişi Arama Butonları
+    const btnSearchFriend = document.getElementById('btn-search-friend');
+    const btnNewChat = document.getElementById('btn-new-chat');
+    const navBtnSearch = document.getElementById('nav-btn-search');
+    if (btnSearchFriend) btnSearchFriend.addEventListener('click', openSearchModal);
+    if (btnNewChat) btnNewChat.addEventListener('click', openSearchModal);
+    if (navBtnSearch) navBtnSearch.addEventListener('click', openSearchModal);
+
+    const btnCloseSearch = document.getElementById('btn-close-friend-search');
+    if (btnCloseSearch) btnCloseSearch.addEventListener('click', closeSearchModal);
+
+    const modalFriendSearch = document.getElementById('modal-friend-search');
+    if (modalFriendSearch) {
+      modalFriendSearch.addEventListener('click', (e) => {
+        if (e.target === modalFriendSearch) closeSearchModal();
       });
     }
 
-    // Mesaj gönderme formu
-    const msgForm = document.getElementById('message-form');
-    if (msgForm) {
-      msgForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this._handleSendMessage();
+    const searchInput = document.getElementById('friend-search-input') || document.getElementById('search-user-input');
+    if (searchInput) {
+      let searchTimer;
+      searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => this._handleUserSearch(searchInput.value), 300);
       });
     }
 
-    // Enter ile mesaj gönder (Shift+Enter = yeni satır)
-    const msgInput = document.getElementById('message-input');
+    // 4. Sohbet Ekranı Kontrolleri
+    const btnChatBack = document.getElementById('btn-chat-back') || document.getElementById('chat-back-btn');
+    if (btnChatBack) {
+      btnChatBack.addEventListener('click', () => {
+        this.showScreen('home');
+        this.renderConversationList();
+      });
+    }
+
+    const btnSend = document.getElementById('btn-send');
+    const msgInput = document.getElementById('msg-input') || document.getElementById('message-input');
+    if (btnSend) {
+      btnSend.addEventListener('click', () => this._handleSendMessage());
+    }
     if (msgInput) {
       msgInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -456,629 +549,109 @@ class VoynApp {
       });
     }
 
-    // Dosya ekleme
-    const attachBtn = document.getElementById('attach-btn');
+    const btnAttach = document.getElementById('btn-attach');
     const fileInput = document.getElementById('file-input');
-    if (attachBtn && fileInput) {
-      attachBtn.addEventListener('click', () => fileInput.click());
+    if (btnAttach && fileInput) {
+      btnAttach.addEventListener('click', () => fileInput.click());
       fileInput.addEventListener('change', (e) => this._handleFileAttach(e));
     }
 
-    // Sesli mesaj
-    const voiceBtn = document.getElementById('voice-btn');
-    if (voiceBtn) {
-      voiceBtn.addEventListener('mousedown', () => this._startVoice());
-      voiceBtn.addEventListener('mouseup', () => this._stopVoice());
-      voiceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); this._startVoice(); });
-      voiceBtn.addEventListener('touchend', (e) => { e.preventDefault(); this._stopVoice(); });
+    // 5. Sesli / Görüntülü Arama Butonları
+    const btnVoiceCall = document.getElementById('btn-voice-call');
+    const btnVideoCall = document.getElementById('btn-video-call');
+    if (btnVoiceCall) {
+      btnVoiceCall.addEventListener('click', () => {
+        if (this.webrtc && this._activeContactId) {
+          this.webrtc.startCall(this._activeContactId, 'audio');
+        } else {
+          this._showToast('Sesli arama başlatılıyor…', 'info');
+        }
+      });
     }
-
-    // Sesli mesaj oynatma (delegated)
-    const msgList = document.getElementById('message-list');
-    if (msgList) {
-      msgList.addEventListener('click', (e) => {
-        const btn = e.target.closest('.play-voice-btn');
-        if (btn) this._playVoice(btn.dataset.src, btn);
+    if (btnVideoCall) {
+      btnVideoCall.addEventListener('click', () => {
+        if (this.webrtc && this._activeContactId) {
+          this.webrtc.startCall(this._activeContactId, 'video');
+        } else {
+          this._showToast('Görüntülü arama başlatılıyor…', 'info');
+        }
       });
     }
 
-    // Profil avatar yükleme
-    const avatarUpload = document.getElementById('avatar-upload');
-    if (avatarUpload) {
-      avatarUpload.addEventListener('change', (e) => this._handleAvatarUpload(e));
-    }
-
-    // Profil formu
-    const profileForm = document.getElementById('profile-form');
-    if (profileForm) {
-      profileForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this._handleProfileSave();
-      });
-    }
-
-    // Tema değiştirici
+    // 6. Tema Değiştirici
     const themeToggle = document.getElementById('theme-toggle');
     if (themeToggle) {
+      themeToggle.checked = this._theme === 'dark';
       themeToggle.addEventListener('change', () => {
-        this.toggleTheme();
+        this._theme = themeToggle.checked ? 'dark' : 'light';
+        this._applyTheme(this._theme);
       });
     }
 
-    // Çıkış yap
-    const logoutBtn = document.getElementById('logout-btn');
+    // 7. Çıkış
+    const logoutBtn = document.querySelector('.settings-item--danger');
     if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => this._handleLogout());
-    }
-
-    // Sohbet ekranı geri butonu
-    const backBtn = document.getElementById('chat-back-btn');
-    if (backBtn) {
-      backBtn.addEventListener('click', () => this.showScreen('home'));
-    }
-
-    // Arkadaş arama modalı
-    const searchBtn = document.getElementById('search-user-btn');
-    const searchInput = document.getElementById('search-user-input');
-    if (searchInput) {
-      let searchTimer;
-      searchInput.addEventListener('input', () => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => this._handleUserSearch(searchInput.value), 400);
-      });
-    }
-
-    // Arama ekranı (WebRTC)
-    const callAcceptBtn = document.getElementById('call-accept-btn');
-    const callRejectBtn = document.getElementById('call-reject-btn');
-    if (callAcceptBtn) callAcceptBtn.addEventListener('click', () => this.webrtc?.acceptCall());
-    if (callRejectBtn) callRejectBtn.addEventListener('click', () => this.webrtc?.rejectCall());
-
-    // Scroll — eski mesaj yükleme
-    const chatMessages = document.getElementById('message-list');
-    if (chatMessages) {
-      chatMessages.addEventListener('scroll', () => {
-        if (chatMessages.scrollTop === 0 && this._activeConversationId) {
-          this._loadMoreMessages();
+      logoutBtn.addEventListener('click', async () => {
+        if (confirm('Oturumu kapatmak istediğinize emin misiniz?')) {
+          await this.auth.logout();
+          this.showScreen('auth');
         }
       });
     }
   }
 
-  // ─── Auth Handlers ────────────────────────────────────────────────────────
-
-  async _handleAuthSubmit() {
-    const input = document.getElementById('username-input');
-    if (!input) return;
-
-    const username = input.value.trim();
-    const btn = document.getElementById('auth-submit-btn');
-
-    this._setLoading(btn, true);
-    try {
-      const user = await this.auth.createAccount(username);
-      await this._onLoggedIn(user);
-    } catch (err) {
-      this._showError(err.message || 'Hesap oluşturulamadı');
-    } finally {
-      this._setLoading(btn, false);
-    }
-  }
-
-  async _validateUsernameInput(value) {
-    const hint = document.getElementById('username-hint');
-    if (!hint) return;
-
-    value = value.trim().toLowerCase();
-    if (value.length < VOYN_CONFIG.USERNAME_MIN_LENGTH) {
-      hint.textContent = `En az ${VOYN_CONFIG.USERNAME_MIN_LENGTH} karakter gerekli`;
-      hint.className = 'input-hint error';
-      return;
-    }
-    if (!VOYN_CONFIG.USERNAME_REGEX.test(value)) {
-      hint.textContent = 'Yalnızca harf, rakam ve _ kullanılabilir';
-      hint.className = 'input-hint error';
-      return;
-    }
-
-    hint.textContent = 'Kontrol ediliyor…';
-    hint.className = 'input-hint';
-
-    try {
-      const available = await this.auth.checkUsernameAvailable(value);
-      hint.textContent = available ? '✓ Kullanılabilir' : '✗ Bu kullanıcı adı alınmış';
-      hint.className = `input-hint ${available ? 'success' : 'error'}`;
-    } catch {
-      hint.textContent = '';
-    }
-  }
-
-  // ─── Messaging Handlers ───────────────────────────────────────────────────
-
-  async _handleSendMessage() {
-    const input = document.getElementById('message-input');
-    if (!input || !this._activeContactId) return;
-
-    const text = input.value.trim();
-    if (!text) return;
-
-    input.value = '';
-    input.style.height = 'auto';
-
-    try {
-      await this.messaging.sendMessage(this._activeContactId, text, 'text');
-      await this.renderMessageList(this._activeConversationId);
-    } catch (err) {
-      this._showError('Mesaj gönderilemedi: ' + err.message);
-    }
-  }
-
-  async _handleFileAttach(event) {
-    const file = event.target.files[0];
-    if (!file || !this._activeContactId) return;
-
-    event.target.value = '';
-
-    if (file.size > VOYN_CONFIG.MAX_FILE_SIZE) {
-      this._showError('Dosya boyutu 50 MB\'ı aşamaz');
-      return;
-    }
-
-    const type = file.type.startsWith('image/')
-      ? 'image'
-      : file.type.startsWith('video/')
-      ? 'video'
-      : 'file';
-
-    try {
-      this._showToast('Dosya gönderiliyor…', 'info');
-      await this.messaging.sendMessage(this._activeContactId, file, type);
-      await this.renderMessageList(this._activeConversationId);
-    } catch (err) {
-      this._showError('Dosya gönderilemedi: ' + err.message);
-    }
-  }
-
-  async _startVoice() {
-    const btn = document.getElementById('voice-btn');
-    if (btn) btn.classList.add('recording');
-    try {
-      await this.messaging.startVoiceRecording();
-    } catch (err) {
-      this._showError('Mikrofona erişilemiyor: ' + err.message);
-    }
-  }
-
-  async _stopVoice() {
-    const btn = document.getElementById('voice-btn');
-    if (btn) btn.classList.remove('recording');
-
-    if (!this._activeContactId) return;
-
-    try {
-      const blob = await this.messaging.stopVoiceRecording();
-      await this.messaging.sendVoiceMessage(this._activeContactId, blob);
-      await this.renderMessageList(this._activeConversationId);
-    } catch (err) {
-      console.warn('[VoynApp] Voice message error:', err);
-    }
-  }
-
-  _playVoice(src, btn) {
-    if (!src) return;
-
-    // Önceki oynatmayı durdur
-    if (this._currentAudio) {
-      this._currentAudio.pause();
-      this._currentAudio = null;
-      document.querySelectorAll('.play-voice-btn').forEach((b) => (b.textContent = '▶'));
-    }
-
-    const audio = new Audio(src);
-    this._currentAudio = audio;
-    btn.textContent = '⏸';
-
-    audio.play().catch(() => {
-      btn.textContent = '▶';
-    });
-
-    audio.onended = () => {
-      btn.textContent = '▶';
-      this._currentAudio = null;
-    };
-
-    audio.onerror = () => {
-      btn.textContent = '▶';
-      this._showError('Ses dosyası oynatılamadı');
-    };
-  }
-
-  async _loadMoreMessages() {
-    if (!this._activeConversationId || this._loadingOlderMessages) return;
-    this._loadingOlderMessages = true;
-
-    const listEl = document.getElementById('message-list');
-    const firstMsg = listEl?.querySelector('.message');
-    const before = firstMsg?.dataset?.createdAt || null;
-
-    try {
-      const older = await this.messaging.loadHistory(this._activeConversationId, before);
-      if (older.length > 0) {
-        await this.renderMessageList(this._activeConversationId);
-      }
-    } catch (err) {
-      console.warn('[VoynApp] Load more messages error:', err);
-    } finally {
-      this._loadingOlderMessages = false;
-    }
-  }
-
-  // ─── Incoming message handler ─────────────────────────────────────────────
-
-  async _handleIncomingMessage(message) {
-    // Aktif konuşmadaysak direkt ekle
-    if (message.conversationId === this._activeConversationId) {
-      await this.renderMessageList(this._activeConversationId);
-      await this.messaging.markConversationRead(this._activeConversationId);
-    } else {
-      // Farklı konuşmadaysak in-app toast göster
-      const sender = await this.db.getUser(message.fromUserId);
-      const name = sender?.username || 'Yeni mesaj';
-      const preview = message.type === 'text'
-        ? (message.content || '').slice(0, 60)
-        : message.type === 'image' ? '📷 Fotoğraf'
-        : message.type === 'voice' ? '🎤 Sesli mesaj'
-        : '📎 Dosya';
-
-      this._showToast(`${name}: ${preview}`, 'message', () => {
-        this._openConversation(message.conversationId, message.fromUserId);
-      });
-    }
-
-    // Konuşma listesini güncelle
-    await this.renderConversationList();
-  }
-
-  // ─── Friend Request UI ────────────────────────────────────────────────────
-
-  async _handleFriendRequest(request) {
-    const { data: fromUser } = await this.supabase
-      .from('users')
-      .select('username, avatar_url')
-      .eq('id', request.from_user_id)
-      .single();
-
-    const name = fromUser?.username || 'Birisi';
-    this._showToast(`${name} sana arkadaşlık isteği gönderdi`, 'info', () => {
-      this.showScreen('home');
-      // Arkadaş istekleri panelini aç
-      const panel = document.getElementById('friend-requests-panel');
-      if (panel) panel.classList.add('open');
-      this.renderFriendRequests();
-    });
-  }
-
-  async renderFriendRequests() {
-    const container = document.getElementById('friend-requests-list');
-    if (!container) return;
-
-    const requests = await this.friends.getPendingRequests();
-
-    if (requests.length === 0) {
-      container.innerHTML = '<p class="empty-hint">Bekleyen istek yok</p>';
-      return;
-    }
-
-    container.innerHTML = requests
-      .map((req) => {
-        const user = req.from_user;
-        const avatarLetter = (user?.username || '?')[0].toUpperCase();
-        return `
-          <div class="friend-request-item" data-request-id="${req.id}">
-            <div class="avatar">
-              ${user?.avatar_url
-                ? `<img src="${this._escapeHtml(user.avatar_url)}" alt="" />`
-                : `<span class="avatar-letter">${avatarLetter}</span>`}
-            </div>
-            <span class="req-username">${this._escapeHtml(user?.username || 'Bilinmeyen')}</span>
-            <div class="req-actions">
-              <button class="btn-accept" data-request-id="${req.id}">Kabul et</button>
-              <button class="btn-reject" data-request-id="${req.id}">Reddet</button>
-            </div>
-          </div>`;
-      })
-      .join('');
-
-    container.querySelectorAll('.btn-accept').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await this.friends.acceptRequest(btn.dataset.requestId);
-          this._showToast('Arkadaşlık isteği kabul edildi', 'success');
-          this.renderFriendRequests();
-          this.renderConversationList();
-        } catch (err) {
-          this._showError(err.message);
-        }
-      });
-    });
-
-    container.querySelectorAll('.btn-reject').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await this.friends.rejectRequest(btn.dataset.requestId);
-          this.renderFriendRequests();
-        } catch (err) {
-          this._showError(err.message);
-        }
-      });
-    });
-  }
-
-  // ─── User Search ──────────────────────────────────────────────────────────
-
-  async _handleUserSearch(query) {
-    const resultsEl = document.getElementById('search-results');
-    if (!resultsEl) return;
-
-    query = query.trim();
-    if (query.length < 2) {
-      resultsEl.innerHTML = '';
-      return;
-    }
-
-    try {
-      const users = await this.friends.searchUser(query);
-      if (users.length === 0) {
-        resultsEl.innerHTML = '<p class="empty-hint">Kullanıcı bulunamadı</p>';
-        return;
-      }
-
-      resultsEl.innerHTML = users
-        .map((u) => {
-          const letter = (u.username || '?')[0].toUpperCase();
-          const actionLabel =
-            u.friendshipStatus === 'friends'
-              ? 'Mesaj at'
-              : u.friendshipStatus === 'request_sent'
-              ? 'İstek gönderildi'
-              : u.friendshipStatus === 'request_received'
-              ? 'Kabul et'
-              : 'İstek gönder';
-
-          return `
-            <div class="search-result-item" data-user-id="${u.id}" data-status="${u.friendshipStatus}">
-              <div class="avatar">
-                ${u.avatar_url
-                  ? `<img src="${this._escapeHtml(u.avatar_url)}" alt="" />`
-                  : `<span class="avatar-letter">${letter}</span>`}
-              </div>
-              <span class="result-username">${this._escapeHtml(u.username)}</span>
-              <button class="btn-add-friend" data-user-id="${u.id}" data-status="${u.friendshipStatus}">
-                ${actionLabel}
-              </button>
-            </div>`;
-        })
-        .join('');
-
-      resultsEl.querySelectorAll('.btn-add-friend').forEach((btn) => {
-        btn.addEventListener('click', () =>
-          this._handleSearchAction(btn.dataset.userId, btn.dataset.status)
-        );
-      });
-    } catch (err) {
-      resultsEl.innerHTML = `<p class="error-hint">${this._escapeHtml(err.message)}</p>`;
-    }
-  }
-
-  async _handleSearchAction(userId, status) {
-    try {
-      if (status === 'friends') {
-        // Konuşmaya git
-        const convId = this.messaging._getConversationId(this.auth.getCurrentUser().id, userId);
-        await this._openConversation(convId, userId);
-        document.getElementById('search-modal')?.classList.remove('open');
-      } else if (status === 'request_received') {
-        const requests = await this.friends.getPendingRequests();
-        const req = requests.find((r) => r.from_user.id === userId);
-        if (req) {
-          await this.friends.acceptRequest(req.id);
-          this._showToast('Arkadaşlık isteği kabul edildi', 'success');
-        }
-      } else if (status === 'none') {
-        await this.friends.sendFriendRequest(userId);
-        this._showToast('İstek gönderildi', 'success');
-      }
-    } catch (err) {
-      this._showError(err.message);
-    }
-  }
-
-  // ─── Profile Handlers ─────────────────────────────────────────────────────
-
-  async _handleProfileSave() {
-    const usernameEl = document.getElementById('edit-username');
-    const bioEl = document.getElementById('edit-bio');
-    const btn = document.getElementById('save-profile-btn');
-
-    this._setLoading(btn, true);
-    try {
-      await this.auth.updateProfile({
-        username: usernameEl?.value,
-        bio: bioEl?.value,
-      });
-      this._showToast('Profil güncellendi', 'success');
-      this.renderProfileScreen();
-    } catch (err) {
-      this._showError(err.message);
-    } finally {
-      this._setLoading(btn, false);
-    }
-  }
-
-  async _handleAvatarUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    try {
-      this._showToast('Fotoğraf yükleniyor…', 'info');
-      await this.auth.uploadAvatar(file);
-      this.renderProfileScreen();
-      this._showToast('Profil fotoğrafı güncellendi', 'success');
-    } catch (err) {
-      this._showError(err.message);
-    }
-  }
-
-  // ─── Logout ───────────────────────────────────────────────────────────────
-
-  async _handleLogout() {
-    const confirmed = confirm('Oturumu kapatmak istiyor musun?');
-    if (!confirmed) return;
-
-    try {
-      this.auth.stopPresenceHeartbeat();
-      this.messaging.stopListening();
-      this.friends.unsubscribePresence();
-      await this.auth.logout();
-      this.showScreen('auth');
-    } catch (err) {
-      console.error('[VoynApp] Logout error:', err);
-      this.showScreen('auth');
-    }
-  }
-
-  // ─── Presence UI ──────────────────────────────────────────────────────────
-
-  _updatePresenceUI(userId, presence) {
-    // Konuşma listesindeki nokta
-    document.querySelectorAll(`[data-contact-id="${userId}"] .avatar`).forEach((el) => {
-      el.classList.toggle('online', presence.isOnline);
-    });
-
-    // Açık sohbetin başlığı
-    if (this._activeContactId === userId) {
-      const statusEl = document.getElementById('chat-header-status');
-      if (statusEl) {
-        statusEl.textContent = presence.isOnline
-          ? 'çevrimiçi'
-          : presence.lastSeen
-          ? `son görülme: ${this._formatTime(presence.lastSeen)}`
-          : '';
-      }
-    }
-  }
-
-  // ─── Theme ────────────────────────────────────────────────────────────────
-
-  toggleTheme() {
-    this._theme = this._theme === 'dark' ? 'light' : 'dark';
-    this._applyTheme(this._theme);
-    localStorage.setItem('voyn_theme', this._theme);
-  }
+  // ─── Tema & Bildirim Yardımcıları ─────────────────────────────────────────
 
   _applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
-    const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) {
-      metaTheme.content = theme === 'dark' ? '#0F0F0F' : '#FFFFFF';
-    }
+    localStorage.setItem('voyn_theme', theme);
   }
 
-  // ─── Toast Notifications ──────────────────────────────────────────────────
-
-  /**
-   * In-app toast bildirimi göster
-   * @param {string} text
-   * @param {'info'|'success'|'error'|'message'} type
-   * @param {Function|null} onClick
-   */
-  _showToast(text, type = 'info', onClick = null) {
-    const existing = document.getElementById('voyn-toast');
-    if (existing) existing.remove();
-
-    const toast = document.createElement('div');
-    toast.id = 'voyn-toast';
-    toast.className = `toast toast-${type}`;
-    toast.textContent = text;
-    toast.setAttribute('role', 'alert');
-
-    if (onClick) {
-      toast.style.cursor = 'pointer';
-      toast.addEventListener('click', () => {
-        onClick();
-        toast.remove();
-      });
+  _showToast(msg, type = 'info') {
+    let toast = document.getElementById('voyn-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'voyn-toast';
+      toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(20, 20, 25, 0.9);
+        color: #fff;
+        padding: 10px 20px;
+        border-radius: 9999px;
+        border: 1px solid rgba(124, 58, 237, 0.4);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        font-size: 13px;
+        font-weight: 500;
+        z-index: 9999;
+        transition: all 0.25s ease;
+        backdrop-filter: blur(10px);
+      `;
+      document.body.appendChild(toast);
     }
 
-    document.body.appendChild(toast);
+    toast.textContent = msg;
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
 
-    // Animasyonla göster
-    requestAnimationFrame(() => toast.classList.add('show'));
-
-    if (this._toastTimer) clearTimeout(this._toastTimer);
+    clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => {
-      toast.classList.remove('show');
-      setTimeout(() => toast.remove(), 300);
-    }, VOYN_CONFIG.TOAST_DURATION);
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(-10px)';
+    }, 2800);
   }
 
-  _showError(message) {
-    this._showToast(message, 'error');
-    console.error('[VoynApp]', message);
+  _showError(msg) {
+    this._showToast(msg, 'error');
   }
 
-  // ─── Service Worker ───────────────────────────────────────────────────────
-
-  async _registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return;
-
-    try {
-      const reg = await navigator.serviceWorker.register('/sw.js');
-      console.log('[VoynApp] SW registered:', reg.scope);
-
-      // Push bildirimleri
-      if ('Notification' in window && VOYN_CONFIG.VAPID_PUBLIC_KEY !== 'YOUR_VAPID_PUBLIC_KEY') {
-        const permission = await Notification.requestPermission();
-        if (permission === 'granted') {
-          await this._subscribePush(reg);
-        }
-      }
-    } catch (err) {
-      console.warn('[VoynApp] SW registration failed:', err);
-    }
+  _formatTime(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
   }
-
-  async _subscribePush(registration) {
-    try {
-      const existing = await registration.pushManager.getSubscription();
-      if (existing) return existing;
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: this._urlBase64ToUint8Array(VOYN_CONFIG.VAPID_PUBLIC_KEY),
-      });
-
-      // Aboneliği sunucuya kaydet
-      await this.supabase.from('push_subscriptions').upsert({
-        user_id: this.auth.getCurrentUser().id,
-        subscription: JSON.stringify(subscription),
-        created_at: new Date().toISOString(),
-      });
-
-      return subscription;
-    } catch (err) {
-      console.warn('[VoynApp] Push subscription failed:', err);
-    }
-  }
-
-  _urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = atob(base64);
-    return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
-  }
-
-  // ─── Utility ──────────────────────────────────────────────────────────────
 
   _escapeHtml(str) {
     if (!str) return '';
@@ -1087,43 +660,21 @@ class VoynApp {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+      .replace(/'/g, '&#039;');
   }
 
-  _formatTime(isoString) {
-    if (!isoString) return '';
-    const date = new Date(isoString);
-    const now = new Date();
-    const diff = now - date;
-    const oneDay = 86400000;
-
-    if (diff < 60000) return 'şimdi';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}dk`;
-    if (diff < oneDay) {
-      return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  async _registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      try {
+        await navigator.serviceWorker.register('sw.js');
+      } catch (err) {
+        console.warn('SW kaydı:', err);
+      }
     }
-    if (diff < 7 * oneDay) {
-      return date.toLocaleDateString('tr-TR', { weekday: 'short' });
-    }
-    return date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
-  }
-
-  _formatBytes(bytes) {
-    if (!bytes) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
-  }
-
-  _setLoading(btn, loading) {
-    if (!btn) return;
-    btn.disabled = loading;
-    btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
-    btn.textContent = loading ? 'Lütfen bekleyin…' : btn.dataset.originalText;
   }
 }
 
-// ─── Uygulama başlat ──────────────────────────────────────────────────────────
+// ─── Başlat ────────────────────────────────────────────────────────────────
 
 const voynApp = new VoynApp();
 document.addEventListener('DOMContentLoaded', () => voynApp.init());

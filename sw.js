@@ -3,7 +3,7 @@
  * Cache stratejisi, Push bildirimleri, Offline fallback, Background sync
  */
 
-const SW_VERSION = 'v1.0.0';
+const SW_VERSION = 'v1.0.2';
 const CACHE_NAME = `voyn-cache-${SW_VERSION}`;
 const OFFLINE_URL = './offline.html';
 

@@ -44,7 +44,7 @@ class VoynMessaging {
           event: 'INSERT',
           schema: 'public',
           table: 'messages',
-          filter: `to_user_id=eq.${user.id}`,
+          filter: `receiver_id=eq.${user.id}`,
         },
         (payload) => this._handleIncoming(payload.new)
       )
@@ -55,7 +55,7 @@ class VoynMessaging {
           event: 'UPDATE',
           schema: 'public',
           table: 'messages',
-          filter: `from_user_id=eq.${user.id}`,
+          filter: `sender_id=eq.${user.id}`,
         },
         (payload) => this._handleStatusUpdate(payload.new)
       )
@@ -169,15 +169,14 @@ class VoynMessaging {
       // Supabase'e mesajı ekle
       const dbRecord = {
         id: messagePayload.id,
-        from_user_id: messagePayload.from_user_id,
-        to_user_id: messagePayload.to_user_id,
+        sender_id: messagePayload.from_user_id,
+        receiver_id: messagePayload.to_user_id,
         conversation_id: messagePayload.conversation_id,
         type: messagePayload.type,
         content: type === VOYN_CONFIG.MESSAGE_TYPES.TEXT ? rawContent : null,
-        url: url || null,
+        file_url: url || null,
         file_name: messagePayload.fileName || null,
         file_size: messagePayload.fileSize || null,
-        mime_type: messagePayload.mimeType || null,
         status: 'sent',
         created_at: messagePayload.created_at,
       };
@@ -376,18 +375,19 @@ class VoynMessaging {
 
   async _handleIncoming(raw) {
     const user = this.auth.getCurrentUser();
+    const senderId = raw.sender_id || raw.from_user_id;
+    const receiverId = raw.receiver_id || raw.to_user_id;
 
     const message = {
       id: raw.id,
       conversationId: raw.conversation_id,
-      fromUserId: raw.from_user_id,
-      toUserId: raw.to_user_id,
+      fromUserId: senderId,
+      toUserId: receiverId,
       type: raw.type,
       content: raw.content || null,
-      url: raw.url || null,
+      url: raw.file_url || raw.url || null,
       fileName: raw.file_name || null,
       fileSize: raw.file_size || null,
-      mimeType: raw.mime_type || null,
       status: 'delivered',
       createdAt: raw.created_at,
     };
@@ -396,7 +396,7 @@ class VoynMessaging {
     await this.db.saveMessage(message);
 
     // Konuşmayı güncelle
-    await this._upsertConversation(raw.from_user_id, raw, true);
+    await this._upsertConversation(senderId, raw, true);
 
     // Teslim bildirimi gönder
     await this.markAsDelivered(raw.id);
@@ -471,14 +471,13 @@ class VoynMessaging {
     const messages = (data || []).map((raw) => ({
       id: raw.id,
       conversationId: raw.conversation_id,
-      fromUserId: raw.from_user_id,
-      toUserId: raw.to_user_id,
+      fromUserId: raw.sender_id || raw.from_user_id,
+      toUserId: raw.receiver_id || raw.to_user_id,
       type: raw.type,
       content: raw.content || null,
-      url: raw.url || null,
+      url: raw.file_url || raw.url || null,
       fileName: raw.file_name || null,
       fileSize: raw.file_size || null,
-      mimeType: raw.mime_type || null,
       status: raw.status,
       createdAt: raw.created_at,
       deliveredAt: raw.delivered_at || null,
