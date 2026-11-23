@@ -145,7 +145,7 @@ class VoynDB {
   }
 
   /**
-   * Konuşmaya ait mesajları getir (sayfalı)
+   * Konuşmaya ait mesajları getir (Kronolojik sıralı: en eski üstte, en yeni sonda)
    */
   async getMessages(conversationId, { limit = VOYN_CONFIG.MESSAGES_PER_PAGE, before = null } = {}) {
     return new Promise((resolve, reject) => {
@@ -153,20 +153,30 @@ class VoynDB {
       const index = tx.objectStore('messages').index('by_conversation');
       const results = [];
 
-      const req = index.openCursor(IDBKeyRange.only(conversationId), 'prev');
+      const req = index.openCursor(IDBKeyRange.only(conversationId));
       req.onsuccess = () => {
         const cursor = req.result;
-        if (!cursor || results.length >= limit) {
-          resolve(results.reverse());
-          return;
-        }
-        const msg = cursor.value;
-        if (before && msg.createdAt >= before) {
+        if (cursor) {
+          const msg = cursor.value;
+          if (!before || (msg.createdAt && msg.createdAt < before)) {
+            results.push(msg);
+          }
           cursor.continue();
-          return;
+        } else {
+          // Kesin kronolojik sıralama (tarihe göre küçükten büyüğe)
+          results.sort((a, b) => {
+            const timeA = new Date(a.createdAt || 0).getTime();
+            const timeB = new Date(b.createdAt || 0).getTime();
+            return timeA - timeB;
+          });
+
+          // Limit varsa en son gelen 'limit' adedini al
+          if (limit && results.length > limit) {
+            resolve(results.slice(results.length - limit));
+          } else {
+            resolve(results);
+          }
         }
-        results.push(msg);
-        cursor.continue();
       };
       req.onerror = () => reject(req.error);
     });

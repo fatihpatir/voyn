@@ -1,12 +1,13 @@
 /**
- * VOYN WebRTC - Sesli/Görüntülü Arama Sistemi
- * Supabase Realtime üzerinden signaling
+ * VOYN WebRTC - Sesli ve Görüntülü Arama Sistemi
+ * Supabase Realtime Broadcast + `calls` tablosu ile ultra-hızlı signaling.
  */
 
 class VoynWebRTC {
-  constructor(supabaseClient, currentUser) {
+  constructor(supabaseClient, authService) {
     this.supabase = supabaseClient;
-    this.currentUser = currentUser;
+    this.auth = authService;
+    this.currentUser = null;
 
     // RTCPeerConnection instance
     this.peerConnection = null;
@@ -17,22 +18,25 @@ class VoynWebRTC {
 
     // Aktif arama bilgileri
     this.activeCallId = null;
-    this.activeCallType = null; // 'audio' | 'video'
+    this.activeCallType = 'audio'; // 'audio' | 'video'
     this.activeCallTarget = null;
+    this.activeCallerName = null;
     this.isInitiator = false;
 
-    // ICE candidate kuyruğu (remote description gelmeden önce gelenler)
+    // Bekleyen ICE adayları
     this.pendingCandidates = [];
 
-    // Realtime subscription
-    this.callSubscription = null;
+    // Realtime kanalları
+    this.userSignalChannel = null;
+    this.callRoomChannel = null;
+    this.callDbSubscription = null;
 
     // Durum
     this.isMuted = false;
     this.isVideoOff = false;
     this.connectionState = 'idle'; // idle | calling | ringing | connected | ended
 
-    // ICE yapılandırması
+    // ICE Yapılandırması (STUN + TURN)
     this.iceConfig = {
       iceServers: [
         ...(typeof VOYN_CONFIG !== 'undefined' ? VOYN_CONFIG.STUN_SERVERS : [
@@ -55,75 +59,99 @@ class VoynWebRTC {
       iceCandidatePoolSize: 10,
     };
 
-    // Event callbacks
+    // Callback fonksiyonları
     this.onIncomingCall = null;      // (callData) => void
     this.onCallConnected = null;     // () => void
     this.onCallEnded = null;         // (reason) => void
-    this.onRemoteStream = null;      // (stream) => void
-    this.onConnectionStateChange = null; // (state) => void
     this.onError = null;             // (error) => void
+  }
 
-    // Supabase Realtime kanal dinlemeyi başlat
-    this._listenForSignals();
+  /**
+   * Aktif kullanıcıyı ayarla ve sinyal dinlemeyi başlat
+   */
+  setUser(user) {
+    this.currentUser = user;
+    if (user && user.id) {
+      this._listenForIncomingCalls();
+    }
+  }
+
+  _getCurrentUser() {
+    if (this.currentUser) return this.currentUser;
+    if (this.auth && typeof this.auth.getCurrentUser === 'function') {
+      this.currentUser = this.auth.getCurrentUser();
+    }
+    return this.currentUser;
   }
 
   /* ─────────────────────────── PUBLIC API ─────────────────────────── */
 
   /**
-   * Arama başlat
-   * @param {string} targetUserId - Aranacak kullanıcının ID'si
-   * @param {'audio'|'video'} type - Arama tipi
+   * Arama başlat (Sesli veya Görüntülü)
    */
-  async startCall(targetUserId, type = 'audio') {
+  async startCall(targetUserId, type = 'audio', targetUserName = '') {
     try {
+      const user = this._getCurrentUser();
+      if (!user) throw new Error('Arama yapmak için oturum açılmalıdır.');
+
       if (this.connectionState !== 'idle') {
-        throw new Error('Zaten aktif bir arama var');
+        throw new Error('Zaten aktif bir görüşme devam ediyor.');
       }
 
       this.isInitiator = true;
       this.activeCallType = type;
       this.activeCallTarget = targetUserId;
+      this.activeCallerName = targetUserName || 'Kullanıcı';
       this.connectionState = 'calling';
 
-      // Medya akışını al
+      // 1. Yerel medyayı hazırla
       await this._getLocalMedia(type);
 
-      // Arama kaydı oluştur
-      const callId = this._generateCallId();
+      // 2. UUID call ID üret
+      const callId = crypto.randomUUID();
       this.activeCallId = callId;
 
+      // 3. UI güncelle ve giden arama bekleme sesini çal
+      this._updateCallScreenUI('calling', this.activeCallerName, type);
+      if (window.voynSound) {
+        window.voynSound.startOutgoingTone();
+      }
+
+      // 4. Arama odasına katıl
+      await this._joinCallRoom(callId);
+
+      // 5. Calls tablosuna kaydet
       await this.supabase.from('calls').insert({
         id: callId,
-        caller_id: this.currentUser.id,
+        caller_id: user.id,
         callee_id: targetUserId,
         type: type,
         status: 'ringing',
-        created_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
       });
 
-      // RTCPeerConnection kur
-      await this._createPeerConnection();
-
-      // Offer oluştur
-      const offer = await this.peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: type === 'video',
+      // 6. Hedef kullanıcının kişisel kanalına Realtime Broadcast gönder
+      const targetChannel = this.supabase.channel(`user-calls:${targetUserId}`);
+      targetChannel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          targetChannel.send({
+            type: 'broadcast',
+            event: 'incoming_call',
+            payload: {
+              callId,
+              callerId: user.id,
+              callerName: user.displayName || user.username || 'VOYN Kullanıcısı',
+              callType: type,
+            },
+          });
+        }
       });
 
-      await this.peerConnection.setLocalDescription(offer);
-
-      // Offer'ı karşı tarafa gönder
-      await this._sendSignal(callId, {
-        type: 'offer',
-        sdp: offer,
-        callType: type,
-        callerName: this.currentUser.username || this.currentUser.id,
-      });
-
-      this._updateUI('calling');
-      this._startCallTimeout();
+      // 7. Zaman aşımı (45 sn cevap verilmezse)
+      this._startCallTimeout(45000);
 
     } catch (err) {
+      console.error('[WebRTC] startCall hatası:', err);
       this._handleError('startCall', err);
       await this._cleanupCall('error');
     }
@@ -131,44 +159,46 @@ class VoynWebRTC {
 
   /**
    * Gelen aramayı cevapla
-   * @param {string} callId
    */
   async answerCall(callId) {
     try {
-      this.activeCallId = callId;
-      this.isInitiator = false;
-      this.connectionState = 'connected';
-
-      // Medya akışını al
-      await this._getLocalMedia(this.activeCallType);
-
-      // RTCPeerConnection kur (zaten kurulduysa geç)
-      if (!this.peerConnection) {
-        await this._createPeerConnection();
+      if (window.voynSound) {
+        window.voynSound.stopRingtone();
       }
 
-      // Çağrı durumunu güncelle
+      this.activeCallId = callId;
+      this.isInitiator = false;
+      this.connectionState = 'connecting';
+
+      // 1. Yerel medyayı hazırla
+      await this._getLocalMedia(this.activeCallType);
+
+      // 2. UI güncelle
+      this._updateCallScreenUI('connected', this.activeCallerName, this.activeCallType);
+
+      // 3. Çağrı odasına katıl
+      await this._joinCallRoom(callId);
+
+      // 4. RTCPeerConnection oluştur
+      await this._createPeerConnection();
+
+      // 5. Veritabanında arama durumunu güncelle
       await this.supabase
         .from('calls')
-        .update({ status: 'active', answered_at: new Date().toISOString() })
+        .update({ status: 'answered' })
         .eq('id', callId);
 
-      // Answer oluştur
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-
-      // Answer'ı gönder
-      await this._sendSignal(callId, {
-        type: 'answer',
-        sdp: answer,
-      });
-
-      // Bekleyen ICE candidate'leri ekle
-      await this._flushPendingCandidates();
-
-      this._updateUI('connected');
+      // 6. Odadaki diğer tarafa hazır olduğumuzu bildir (hazır olunca arayan offer gönderecek)
+      if (this.callRoomChannel) {
+        this.callRoomChannel.send({
+          type: 'broadcast',
+          event: 'callee_ready',
+          payload: { callId },
+        });
+      }
 
     } catch (err) {
+      console.error('[WebRTC] answerCall hatası:', err);
       this._handleError('answerCall', err);
       await this._cleanupCall('error');
     }
@@ -176,520 +206,529 @@ class VoynWebRTC {
 
   /**
    * Gelen aramayı reddet
-   * @param {string} callId
    */
   async rejectCall(callId) {
     try {
-      await this.supabase
-        .from('calls')
-        .update({ status: 'rejected', ended_at: new Date().toISOString() })
-        .eq('id', callId);
+      if (window.voynSound) {
+        window.voynSound.stopRingtone();
+      }
 
-      await this._sendSignal(callId, { type: 'reject' });
+      const id = callId || this.activeCallId;
+      if (id) {
+        await this.supabase
+          .from('calls')
+          .update({ status: 'rejected', ended_at: new Date().toISOString() })
+          .eq('id', id);
+
+        if (this.callRoomChannel) {
+          this.callRoomChannel.send({
+            type: 'broadcast',
+            event: 'call_rejected',
+            payload: { callId: id },
+          });
+        }
+      }
+
       await this._cleanupCall('rejected');
-
     } catch (err) {
-      this._handleError('rejectCall', err);
+      console.warn('[WebRTC] rejectCall:', err);
+      await this._cleanupCall('rejected');
     }
   }
 
   /**
-   * Aktif aramayı bitir
+   * Aktif aramayı sonlandır
    */
   async endCall() {
-    if (!this.activeCallId) return;
-
     try {
-      await this.supabase
-        .from('calls')
-        .update({ status: 'ended', ended_at: new Date().toISOString() })
-        .eq('id', this.activeCallId);
+      if (window.voynSound) {
+        window.voynSound.stopOutgoingTone();
+        window.voynSound.stopRingtone();
+      }
 
-      await this._sendSignal(this.activeCallId, { type: 'hangup' });
+      if (this.activeCallId) {
+        await this.supabase
+          .from('calls')
+          .update({ status: 'ended', ended_at: new Date().toISOString() })
+          .eq('id', this.activeCallId);
+
+        if (this.callRoomChannel) {
+          this.callRoomChannel.send({
+            type: 'broadcast',
+            event: 'call_ended',
+            payload: { callId: this.activeCallId },
+          });
+        }
+      }
+
       await this._cleanupCall('ended');
-
     } catch (err) {
-      this._handleError('endCall', err);
-      await this._cleanupCall('error');
+      console.warn('[WebRTC] endCall:', err);
+      await this._cleanupCall('ended');
     }
   }
 
   /**
-   * Mikrofonu aç/kapat
-   * @returns {boolean} Yeni mute durumu
+   * Mikrofon Aç/Kapat
    */
   toggleMute() {
-    if (!this.localStream) return this.isMuted;
-
+    if (!this.localStream) return false;
     this.isMuted = !this.isMuted;
-    this.localStream.getAudioTracks().forEach(track => {
-      track.enabled = !this.isMuted;
+    this.localStream.getAudioTracks().forEach((t) => {
+      t.enabled = !this.isMuted;
     });
 
-    this._updateMuteUI();
+    const muteBtn = document.getElementById('btn-mute');
+    if (muteBtn) {
+      muteBtn.classList.toggle('active', this.isMuted);
+      muteBtn.style.background = this.isMuted ? 'var(--color-danger, #ef4444)' : '';
+    }
     return this.isMuted;
   }
 
   /**
-   * Kamerayı aç/kapat
-   * @returns {boolean} Yeni video durumu
+   * Kamera Aç/Kapat
    */
   toggleVideo() {
-    if (!this.localStream) return this.isVideoOff;
-
+    if (!this.localStream) return false;
     this.isVideoOff = !this.isVideoOff;
-    this.localStream.getVideoTracks().forEach(track => {
-      track.enabled = !this.isVideoOff;
+    this.localStream.getVideoTracks().forEach((t) => {
+      t.enabled = !this.isVideoOff;
     });
-
-    this._updateVideoUI();
     return this.isVideoOff;
   }
 
-  /**
-   * Hoparlör/telefon çıkışını değiştir (mobil)
-   */
-  async toggleSpeaker() {
-    if (!this.remoteStream) return;
-    // AudioContext üzerinden routing (mobil cihazlarda)
-    try {
-      const audioEl = document.getElementById('remote-audio');
-      if (audioEl && audioEl.setSinkId) {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const speaker = devices.find(d => d.kind === 'audiooutput' && d.label.toLowerCase().includes('speaker'));
-        if (speaker) {
-          await audioEl.setSinkId(speaker.deviceId);
-        }
-      }
-    } catch (err) {
-      console.warn('Speaker toggle desteklenmiyor:', err);
+  /* ─────────────────────────── SIGNALING & ROOM ─────────────────────── */
+
+  _listenForIncomingCalls() {
+    const user = this._getCurrentUser();
+    if (!user || !user.id) return;
+
+    if (this.userSignalChannel) {
+      this.supabase.removeChannel(this.userSignalChannel);
     }
-  }
 
-  /**
-   * Ekran paylaşımını başlat/durdur
-   */
-  async toggleScreenShare() {
-    try {
-      if (this._screenShareStream) {
-        // Ekran paylaşımını durdur, kameraya dön
-        this._screenShareStream.getTracks().forEach(t => t.stop());
-        this._screenShareStream = null;
+    // 1. Realtime Broadcast ile gelen aramaları dinle (anlık)
+    this.userSignalChannel = this.supabase
+      .channel(`user-calls:${user.id}`)
+      .on('broadcast', { event: 'incoming_call' }, (evt) => {
+        const payload = evt.payload;
+        this._handleIncomingCallOffer(payload);
+      })
+      .subscribe();
 
-        // Kamera track'ini geri yükle
-        const camTrack = this.localStream.getVideoTracks()[0];
-        if (camTrack && this.peerConnection) {
-          const sender = this.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) await sender.replaceTrack(camTrack);
-        }
-      } else {
-        // Ekran paylaşımını başlat
-        this._screenShareStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: 'always' },
-          audio: false,
-        });
-
-        const screenTrack = this._screenShareStream.getVideoTracks()[0];
-        if (screenTrack && this.peerConnection) {
-          const sender = this.peerConnection.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) await sender.replaceTrack(screenTrack);
-        }
-
-        // Ekran paylaşımı durdurulduğunda
-        screenTrack.addEventListener('ended', () => {
-          this.toggleScreenShare();
-        });
-      }
-    } catch (err) {
-      this._handleError('toggleScreenShare', err);
+    // 2. Calls tablosu postgres_changes ile dinle (yedekleme kanalı)
+    if (this.callDbSubscription) {
+      this.supabase.removeChannel(this.callDbSubscription);
     }
-  }
 
-  /* ─────────────────────────── PRIVATE: SIGNALING ─────────────────────── */
-
-  /**
-   * Supabase Realtime üzerinden gelen sinyal mesajlarını dinle
-   */
-  _listenForSignals() {
-    this.callSubscription = this.supabase
-      .channel(`calls:${this.currentUser.id}`)
+    this.callDbSubscription = this.supabase
+      .channel(`calls-db:${user.id}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'call_signals',
-          filter: `to_user=eq.${this.currentUser.id}`,
+          table: 'calls',
+          filter: `callee_id=eq.${user.id}`,
         },
-        (payload) => this._handleSignal(payload.new)
+        async (payload) => {
+          const newCall = payload.new;
+          if (newCall && newCall.status === 'ringing') {
+            // Arayanın kullanıcı adını getir
+            let callerName = 'Kullanıcı';
+            try {
+              const { data } = await this.supabase
+                .from('users')
+                .select('username, display_name')
+                .eq('id', newCall.caller_id)
+                .single();
+              if (data) callerName = data.display_name || data.username || 'Kullanıcı';
+            } catch (e) {}
+
+            this._handleIncomingCallOffer({
+              callId: newCall.id,
+              callerId: newCall.caller_id,
+              callerName: callerName,
+              callType: newCall.type || 'audio',
+            });
+          }
+        }
       )
       .subscribe();
   }
 
-  /**
-   * Sinyal mesajı gönder
-   */
-  async _sendSignal(callId, data) {
-    await this.supabase.from('call_signals').insert({
-      call_id: callId,
-      from_user: this.currentUser.id,
-      to_user: this.isInitiator ? this.activeCallTarget : (await this._getCallerId(callId)),
-      signal_type: data.type,
-      payload: JSON.stringify(data),
-      created_at: new Date().toISOString(),
-    });
-  }
-
-  /**
-   * Gelen sinyal mesajını işle
-   */
-  async _handleSignal(signal) {
-    try {
-      const data = JSON.parse(signal.payload);
-
-      switch (data.type) {
-        case 'offer':
-          await this._handleOffer(signal, data);
-          break;
-        case 'answer':
-          await this._handleAnswer(data);
-          break;
-        case 'ice-candidate':
-          await this._handleIceCandidate(data);
-          break;
-        case 'reject':
-          await this._cleanupCall('rejected');
-          break;
-        case 'hangup':
-          await this._cleanupCall('remote-hangup');
-          break;
-        default:
-          console.warn('Bilinmeyen sinyal tipi:', data.type);
-      }
-    } catch (err) {
-      this._handleError('_handleSignal', err);
+  _handleIncomingCallOffer(data) {
+    if (this.connectionState !== 'idle') {
+      // Meşgul ise aramayı reddet
+      return;
     }
-  }
 
-  async _handleOffer(signal, data) {
-    // Gelen arama bildirimi göster
-    this.activeCallId = signal.call_id;
+    this.activeCallId = data.callId;
     this.activeCallType = data.callType || 'audio';
-    this.activeCallTarget = signal.from_user;
+    this.activeCallTarget = data.callerId;
+    this.activeCallerName = data.callerName || 'Kullanıcı';
     this.isInitiator = false;
     this.connectionState = 'ringing';
 
-    // RTCPeerConnection kur
-    await this._createPeerConnection();
+    // Zil sesini çal
+    if (window.voynSound) {
+      window.voynSound.startRingtone();
+    }
 
-    // Remote description ayarla
-    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    // UI'da gelen arama modalını göster
+    this._showIncomingCallModal(data);
 
-    // Bekleyen ICE candidate'leri uygula
-    await this._flushPendingCandidates();
-
-    // UI callback
     if (typeof this.onIncomingCall === 'function') {
-      this.onIncomingCall({
-        callId: signal.call_id,
-        callerId: signal.from_user,
-        callerName: data.callerName || signal.from_user,
-        callType: data.callType || 'audio',
+      this.onIncomingCall(data);
+    }
+  }
+
+  async _joinCallRoom(callId) {
+    if (this.callRoomChannel) {
+      await this.supabase.removeChannel(this.callRoomChannel);
+    }
+
+    this.callRoomChannel = this.supabase.channel(`call_room:${callId}`);
+
+    this.callRoomChannel
+      .on('broadcast', { event: 'callee_ready' }, async () => {
+        // Karşı taraf açtı, arayan olarak Offer oluşturup gönderiyoruz
+        if (this.isInitiator) {
+          await this._createOffer();
+        }
+      })
+      .on('broadcast', { event: 'sdp_offer' }, async (evt) => {
+        if (!this.isInitiator) {
+          await this._handleRemoteOffer(evt.payload.sdp);
+        }
+      })
+      .on('broadcast', { event: 'sdp_answer' }, async (evt) => {
+        if (this.isInitiator) {
+          await this._handleRemoteAnswer(evt.payload.sdp);
+        }
+      })
+      .on('broadcast', { event: 'ice_candidate' }, async (evt) => {
+        await this._handleRemoteCandidate(evt.payload.candidate);
+      })
+      .on('broadcast', { event: 'call_ended' }, async () => {
+        await this._cleanupCall('remote_ended');
+      })
+      .on('broadcast', { event: 'call_rejected' }, async () => {
+        await this._cleanupCall('rejected');
+      })
+      .subscribe();
+  }
+
+  /* ─────────────────────────── PEER CONNECTION ─────────────────────────── */
+
+  async _createPeerConnection() {
+    if (this.peerConnection) return;
+
+    this.peerConnection = new RTCPeerConnection(this.iceConfig);
+
+    // 1. Yerel parçaları ekle
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        this.peerConnection.addTrack(track, this.localStream);
       });
     }
 
-    this._updateUI('ringing');
+    // 2. Uzak medya dinleyicisi
+    this.peerConnection.ontrack = (event) => {
+      console.log('[WebRTC] Uzak medya track alındı:', event.track.kind);
+      this.remoteStream = event.streams[0] || new MediaStream([event.track]);
+
+      const remoteAudio = document.getElementById('remote-audio');
+      if (remoteAudio) {
+        remoteAudio.srcObject = this.remoteStream;
+        remoteAudio.play().catch((e) => console.warn('Audio play hatası:', e));
+      }
+
+      if (this.activeCallType === 'video') {
+        const remoteVideo = document.getElementById('remote-video');
+        if (remoteVideo) {
+          remoteVideo.srcObject = this.remoteStream;
+          remoteVideo.play().catch((e) => console.warn('Video play hatası:', e));
+        }
+      }
+    };
+
+    // 3. ICE Candidate
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate && this.callRoomChannel) {
+        this.callRoomChannel.send({
+          type: 'broadcast',
+          event: 'ice_candidate',
+          payload: { candidate: event.candidate.toJSON() },
+        });
+      }
+    };
+
+    // 4. Bağlantı durumu
+    this.peerConnection.onconnectionstatechange = () => {
+      const state = this.peerConnection.connectionState;
+      console.log('[WebRTC] Bağlantı durumu:', state);
+
+      if (state === 'connected') {
+        if (window.voynSound) {
+          window.voynSound.stopOutgoingTone();
+          window.voynSound.stopRingtone();
+        }
+        this.connectionState = 'connected';
+        this._updateCallScreenUI('connected', this.activeCallerName, this.activeCallType);
+        if (typeof this.onCallConnected === 'function') this.onCallConnected();
+      } else if (state === 'disconnected' || state === 'failed') {
+        this._cleanupCall(state);
+      }
+    };
   }
 
-  async _handleAnswer(data) {
-    if (!this.peerConnection) return;
-    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
-    await this._flushPendingCandidates();
-    this.connectionState = 'connected';
-    this._updateUI('connected');
-    if (typeof this.onCallConnected === 'function') this.onCallConnected();
+  async _createOffer() {
+    try {
+      await this._createPeerConnection();
+
+      const offer = await this.peerConnection.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: this.activeCallType === 'video',
+      });
+
+      await this.peerConnection.setLocalDescription(offer);
+
+      if (this.callRoomChannel) {
+        this.callRoomChannel.send({
+          type: 'broadcast',
+          event: 'sdp_offer',
+          payload: { sdp: offer },
+        });
+      }
+    } catch (err) {
+      console.error('[WebRTC] _createOffer hatası:', err);
+    }
   }
 
-  async _handleIceCandidate(data) {
-    const candidate = new RTCIceCandidate(data.candidate);
+  async _handleRemoteOffer(sdp) {
+    try {
+      await this._createPeerConnection();
+      await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
 
-    if (this.peerConnection && this.peerConnection.remoteDescription) {
-      await this.peerConnection.addIceCandidate(candidate);
-    } else {
-      // Remote description henüz gelmedi, kuyruğa al
-      this.pendingCandidates.push(candidate);
+      // Kuyruktaki ICE adaylarını ekle
+      await this._flushPendingCandidates();
+
+      const answer = await this.peerConnection.createAnswer();
+      await this.peerConnection.setLocalDescription(answer);
+
+      if (this.callRoomChannel) {
+        this.callRoomChannel.send({
+          type: 'broadcast',
+          event: 'sdp_answer',
+          payload: { sdp: answer },
+        });
+      }
+    } catch (err) {
+      console.error('[WebRTC] _handleRemoteOffer hatası:', err);
+    }
+  }
+
+  async _handleRemoteAnswer(sdp) {
+    try {
+      if (this.peerConnection) {
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        await this._flushPendingCandidates();
+      }
+    } catch (err) {
+      console.error('[WebRTC] _handleRemoteAnswer hatası:', err);
+    }
+  }
+
+  async _handleRemoteCandidate(candidateData) {
+    try {
+      const candidate = new RTCIceCandidate(candidateData);
+      if (this.peerConnection && this.peerConnection.remoteDescription) {
+        await this.peerConnection.addIceCandidate(candidate);
+      } else {
+        this.pendingCandidates.push(candidate);
+      }
+    } catch (err) {
+      console.warn('[WebRTC] ICE candidate eklenemedi:', err);
     }
   }
 
   async _flushPendingCandidates() {
     if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
-    for (const candidate of this.pendingCandidates) {
+    for (const c of this.pendingCandidates) {
       try {
-        await this.peerConnection.addIceCandidate(candidate);
-      } catch (err) {
-        console.warn('ICE candidate eklenemedi:', err);
-      }
+        await this.peerConnection.addIceCandidate(c);
+      } catch (e) {}
     }
     this.pendingCandidates = [];
   }
 
-  /* ─────────────────────────── PRIVATE: PEER CONNECTION ──────────────── */
-
-  async _createPeerConnection() {
-    this.peerConnection = new RTCPeerConnection(this.iceConfig);
-
-    // Local stream track'lerini ekle
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
-        this.peerConnection.addTrack(track, this.localStream);
-      });
-    }
-
-    // Remote stream oluştur
-    this.remoteStream = new MediaStream();
-    const remoteAudio = document.getElementById('remote-audio');
-    const remoteVideo = document.getElementById('remote-video');
-    if (remoteAudio) remoteAudio.srcObject = this.remoteStream;
-    if (remoteVideo) remoteVideo.srcObject = this.remoteStream;
-
-    // Track olayları
-    this.peerConnection.ontrack = (event) => {
-      event.streams[0].getTracks().forEach(track => {
-        this.remoteStream.addTrack(track);
-      });
-      if (typeof this.onRemoteStream === 'function') {
-        this.onRemoteStream(this.remoteStream);
-      }
-    };
-
-    // ICE candidate olayı
-    this.peerConnection.onicecandidate = async (event) => {
-      if (event.candidate && this.activeCallId) {
-        await this._sendSignal(this.activeCallId, {
-          type: 'ice-candidate',
-          candidate: event.candidate.toJSON(),
-        });
-      }
-    };
-
-    // Bağlantı durumu değişimi
-    this.peerConnection.onconnectionstatechange = () => {
-      const state = this.peerConnection.connectionState;
-      console.log('[WebRTC] Connection state:', state);
-
-      if (typeof this.onConnectionStateChange === 'function') {
-        this.onConnectionStateChange(state);
-      }
-
-      if (state === 'connected') {
-        this.connectionState = 'connected';
-        this._updateUI('connected');
-        if (typeof this.onCallConnected === 'function') this.onCallConnected();
-      } else if (state === 'failed' || state === 'disconnected') {
-        this._cleanupCall(state);
-      }
-    };
-
-    // ICE bağlantı durumu
-    this.peerConnection.oniceconnectionstatechange = () => {
-      const iceState = this.peerConnection.iceConnectionState;
-      console.log('[WebRTC] ICE state:', iceState);
-
-      if (iceState === 'failed') {
-        // ICE restart dene
-        this._restartIce();
-      }
-    };
-
-    // Negotiation needed
-    this.peerConnection.onnegotiationneeded = async () => {
-      if (this.isInitiator && this.connectionState === 'connected') {
-        try {
-          const offer = await this.peerConnection.createOffer();
-          await this.peerConnection.setLocalDescription(offer);
-          await this._sendSignal(this.activeCallId, { type: 'offer', sdp: offer });
-        } catch (err) {
-          console.warn('Renegotiation hatası:', err);
-        }
-      }
-    };
-  }
-
-  async _restartIce() {
-    if (!this.isInitiator || !this.peerConnection) return;
-    try {
-      const offer = await this.peerConnection.createOffer({ iceRestart: true });
-      await this.peerConnection.setLocalDescription(offer);
-      await this._sendSignal(this.activeCallId, { type: 'offer', sdp: offer });
-    } catch (err) {
-      console.warn('ICE restart hatası:', err);
-    }
-  }
-
-  /* ─────────────────────────── PRIVATE: MEDIA ─────────────────────────── */
+  /* ─────────────────────────── MEDIA & DEVICES ─────────────────────────── */
 
   async _getLocalMedia(type) {
+    const isVideo = type === 'video';
     const constraints = {
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video: type === 'video' ? {
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-        facingMode: 'user',
-      } : false,
+      video: isVideo
+        ? {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user',
+          }
+        : false,
     };
 
     this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-    // Yerel video önizleme
-    const localVideo = document.getElementById('local-video');
-    if (localVideo && type === 'video') {
-      localVideo.srcObject = this.localStream;
-      localVideo.muted = true; // Kendi sesini duymamak için
+    if (isVideo) {
+      const localVideo = document.getElementById('local-video');
+      if (localVideo) {
+        localVideo.srcObject = this.localStream;
+        localVideo.muted = true;
+        localVideo.play().catch(() => {});
+      }
     }
   }
 
-  /* ─────────────────────────── PRIVATE: CLEANUP ───────────────────────── */
+  /* ─────────────────────────── UI & CLEANUP ───────────────────────────── */
 
-  async _cleanupCall(reason = 'ended') {
-    // Call timeout temizle
-    if (this._callTimeoutId) {
-      clearTimeout(this._callTimeoutId);
-      this._callTimeoutId = null;
+  _showIncomingCallModal(data) {
+    const modal = document.getElementById('modal-incoming-call');
+    if (!modal) return;
+
+    const nameEl = document.getElementById('incoming-call-name');
+    const letterEl = document.getElementById('incoming-call-letter');
+    const typeEl = document.getElementById('incoming-call-type');
+
+    if (nameEl) nameEl.textContent = data.callerName || 'VOYN Kullanıcısı';
+    if (letterEl) letterEl.textContent = (data.callerName || '?')[0].toUpperCase();
+    if (typeEl) {
+      typeEl.textContent = data.callType === 'video' ? '📹 Görüntülü Arama' : '📞 Sesli Arama';
     }
 
-    // MediaStream'leri durdur
+    modal.classList.add('open');
+  }
+
+  _hideIncomingCallModal() {
+    const modal = document.getElementById('modal-incoming-call');
+    if (modal) modal.classList.remove('open');
+  }
+
+  _updateCallScreenUI(state, callerName, type) {
+    if (window.voynApp && typeof window.voynApp.showScreen === 'function') {
+      window.voynApp.showScreen('call');
+    }
+
+    const nameEl = document.getElementById('call-name');
+    const letterEl = document.getElementById('call-avatar-letter');
+    const statusEl = document.getElementById('call-status');
+    const videoArea = document.getElementById('call-video-area');
+
+    if (nameEl) nameEl.textContent = callerName || 'Arama';
+    if (letterEl) letterEl.textContent = (callerName || '?')[0].toUpperCase();
+
+    if (statusEl) {
+      if (state === 'calling') statusEl.textContent = 'Aranıyor…';
+      else if (state === 'connected') statusEl.textContent = 'Bağlandı';
+      else statusEl.textContent = 'Bağlanıyor…';
+    }
+
+    if (videoArea) {
+      videoArea.style.display = type === 'video' ? 'flex' : 'none';
+    }
+  }
+
+  _startCallTimeout(ms = 45000) {
+    if (this._callTimeoutTimer) clearTimeout(this._callTimeoutTimer);
+    this._callTimeoutTimer = setTimeout(async () => {
+      if (this.connectionState === 'calling') {
+        console.log('[WebRTC] Arama zaman aşımına uğradı');
+        await this.endCall();
+        if (window.voynApp && typeof window.voynApp._showToast === 'function') {
+          window.voynApp._showToast('Cevap verilmedi', 'info');
+        }
+      }
+    }, ms);
+  }
+
+  async _cleanupCall(reason = 'ended') {
+    if (this._callTimeoutTimer) {
+      clearTimeout(this._callTimeoutTimer);
+      this._callTimeoutTimer = null;
+    }
+
+    if (window.voynSound) {
+      window.voynSound.stopOutgoingTone();
+      window.voynSound.stopRingtone();
+    }
+
+    this._hideIncomingCallModal();
+
+    // Medyayı kapat
     if (this.localStream) {
-      this.localStream.getTracks().forEach(t => t.stop());
+      this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
     }
 
-    if (this._screenShareStream) {
-      this._screenShareStream.getTracks().forEach(t => t.stop());
-      this._screenShareStream = null;
-    }
-
-    // PeerConnection'ı kapat
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
 
-    // Video elementlerini temizle
-    ['local-video', 'remote-video', 'remote-audio'].forEach(id => {
+    // Video/Audio elementlerini temizle
+    ['local-video', 'remote-video', 'remote-audio'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.srcObject = null;
     });
 
-    // Durumu sıfırla
-    const previousCallId = this.activeCallId;
+    if (this.callRoomChannel) {
+      await this.supabase.removeChannel(this.callRoomChannel);
+      this.callRoomChannel = null;
+    }
+
     this.activeCallId = null;
-    this.activeCallType = null;
+    this.activeCallType = 'audio';
     this.activeCallTarget = null;
+    this.activeCallerName = null;
     this.isInitiator = false;
     this.isMuted = false;
     this.isVideoOff = false;
     this.pendingCandidates = [];
     this.connectionState = 'idle';
-    this.remoteStream = null;
 
-    // UI callback
     if (typeof this.onCallEnded === 'function') {
       this.onCallEnded(reason);
     }
 
-    this._updateUI('idle');
-    console.log('[WebRTC] Arama sona erdi:', reason, 'callId:', previousCallId);
-  }
-
-  /* ─────────────────────────── PRIVATE: HELPERS ───────────────────────── */
-
-  _generateCallId() {
-    return `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  }
-
-  async _getCallerId(callId) {
-    const { data } = await this.supabase
-      .from('calls')
-      .select('caller_id')
-      .eq('id', callId)
-      .single();
-    return data?.caller_id;
-  }
-
-  _startCallTimeout(ms = 45000) {
-    this._callTimeoutId = setTimeout(async () => {
-      if (this.connectionState === 'calling') {
-        await this._cleanupCall('timeout');
-        await this.supabase
-          .from('calls')
-          .update({ status: 'missed' })
-          .eq('id', this.activeCallId);
+    // Görüşme bitince önceki ekrana dön
+    if (window.voynApp && typeof window.voynApp.showScreen === 'function') {
+      if (window.voynApp._activeConversationId) {
+        window.voynApp.showScreen('chat');
+      } else {
+        window.voynApp.showScreen('home');
       }
-    }, ms);
-  }
-
-  _updateUI(state) {
-    const callScreen = document.getElementById('screen-call');
-    if (!callScreen) return;
-
-    // Mevcut sınıfları temizle
-    callScreen.classList.remove('state-idle', 'state-calling', 'state-ringing', 'state-connected');
-    callScreen.classList.add(`state-${state}`);
-
-    // Ekranı göster/gizle
-    if (state === 'idle') {
-      callScreen.classList.add('hidden');
-    } else {
-      callScreen.classList.remove('hidden');
-    }
-
-    // Durum metni
-    const statusEl = document.getElementById('call-status');
-    const statusMap = {
-      calling: 'Aranıyor...',
-      ringing: 'Gelen Arama',
-      connected: 'Bağlandı',
-      idle: '',
-    };
-    if (statusEl) statusEl.textContent = statusMap[state] || '';
-  }
-
-  _updateMuteUI() {
-    const muteBtn = document.getElementById('call-mute-btn');
-    if (muteBtn) {
-      muteBtn.classList.toggle('active', this.isMuted);
-      muteBtn.setAttribute('aria-pressed', this.isMuted);
-      muteBtn.title = this.isMuted ? 'Mikrofonu Aç' : 'Mikrofonu Kapat';
     }
   }
 
-  _updateVideoUI() {
-    const videoBtn = document.getElementById('call-video-btn');
-    if (videoBtn) {
-      videoBtn.classList.toggle('active', this.isVideoOff);
-      videoBtn.setAttribute('aria-pressed', this.isVideoOff);
-      videoBtn.title = this.isVideoOff ? 'Kamerayı Aç' : 'Kamerayı Kapat';
-    }
-  }
-
-  _handleError(context, err) {
-    console.error(`[WebRTC] ${context}:`, err);
+  _handleError(ctx, err) {
     if (typeof this.onError === 'function') {
-      this.onError({ context, message: err.message, error: err });
+      this.onError({ context: ctx, error: err });
     }
   }
 
-  /**
-   * Realtime aboneliğini temizle (uygulama kapanırken)
-   */
   destroy() {
-    if (this.callSubscription) {
-      this.supabase.removeChannel(this.callSubscription);
-      this.callSubscription = null;
+    if (this.userSignalChannel) {
+      this.supabase.removeChannel(this.userSignalChannel);
+      this.userSignalChannel = null;
+    }
+    if (this.callDbSubscription) {
+      this.supabase.removeChannel(this.callDbSubscription);
+      this.callDbSubscription = null;
     }
     this._cleanupCall('destroy');
   }

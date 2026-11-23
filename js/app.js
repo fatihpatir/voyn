@@ -34,6 +34,18 @@ class VoynApp {
       this.db = new VoynDB();
       await this.db.init();
 
+      // Eski şablon/demo kalıntılarını temizle (tamamen sıfır ve temiz başlangıç)
+      try {
+        const oldConvs = await this.db.getAllConversations();
+        for (const c of oldConvs) {
+          if (!c.id || ['1','2','3','4','chat-1','chat-2'].includes(String(c.id)) || !c.participantIds || c.participantIds.length < 2) {
+            await this.db.deleteConversation(c.id);
+          }
+        }
+      } catch (e) {
+        console.warn('DB cleanup:', e);
+      }
+
       // 3. Modüller
       this.auth = new VoynAuth(this.supabase, this.db);
       this.friends = new VoynFriends(this.supabase, this.db, this.auth);
@@ -68,13 +80,42 @@ class VoynApp {
   async _onLoggedIn(user) {
     console.log('[VoynApp] Giriş yapıldı:', user.username);
     this.auth.startPresenceHeartbeat();
+
+    // WebRTC'ye kullanıcıyı bağla ve dinlemeyi aç
+    if (this.webrtc) {
+      this.webrtc.setUser(user);
+    }
+
+    // Bildirim izni iste (tarayıcı izin verirse arka planda çalışır)
+    if ('Notification' in window && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch (e) {}
+    }
+
     await this.messaging.startListening();
     this.messaging.onMessage((msg) => {
+      // Ses efekti çal
+      if (window.voynSound) {
+        window.voynSound.playMessageSound();
+      }
+
       if (this._activeScreen === 'chat' && this._activeConversationId === msg.conversationId) {
         this.renderMessageList(msg.conversationId);
       } else {
         this.renderConversationList();
         this._showToast(`Yeni mesaj: ${msg.content || 'Dosya'}`, 'info');
+
+        // Arka plandaysa veya ekran kapalıysa sistem bildirimi göster
+        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification('VOYN - Yeni Mesaj', {
+              body: msg.content || 'Yeni bir dosya gönderildi',
+              icon: 'icons/icon-192.png',
+              tag: 'voyn-' + msg.conversationId,
+            });
+          } catch (e) {}
+        }
       }
     });
 
@@ -214,6 +255,7 @@ class VoynApp {
 
     this._activeConversationId = conversationId;
     this._activeContactId = contactId;
+    this._activeContact = contact;
     this.showScreen('chat', { conversationId, contactId, contact });
   }
 
@@ -225,6 +267,7 @@ class VoynApp {
     const headerStatus = document.getElementById('chat-partner-status');
 
     if (contact) {
+      this._activeContact = contact;
       if (headerName) headerName.textContent = contact.displayName || contact.username || 'Kullanıcı';
       if (avatarLetter) avatarLetter.textContent = (contact.username || '?')[0].toUpperCase();
       if (headerStatus) {
@@ -254,6 +297,9 @@ class VoynApp {
         </div>`;
       return;
     }
+
+    // Kesin kronolojik sıralama (en eski en üstte, en yeni mesaj en altta)
+    messages.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
 
     listEl.innerHTML = messages.map((msg) => this._messageHTML(msg, currentUser ? currentUser.id : '')).join('');
 
@@ -314,6 +360,9 @@ class VoynApp {
 
     try {
       await this.messaging.sendMessage(this._activeContactId, text, 'text');
+      if (window.voynSound) {
+        window.voynSound.playSentSound();
+      }
       await this.renderMessageList(this._activeConversationId);
       await this.renderConversationList();
     } catch (err) {
@@ -339,6 +388,9 @@ class VoynApp {
         fileName: file.name,
         fileSize: file.size,
       });
+      if (window.voynSound) {
+        window.voynSound.playSentSound();
+      }
       await this.renderMessageList(this._activeConversationId);
       await this.renderConversationList();
     } catch (err) {
@@ -556,29 +608,93 @@ class VoynApp {
       fileInput.addEventListener('change', (e) => this._handleFileAttach(e));
     }
 
-    // 5. Sesli / Görüntülü Arama Butonları
+    // 5. Sesli / Görüntülü Arama Başlatma
     const btnVoiceCall = document.getElementById('btn-voice-call');
     const btnVideoCall = document.getElementById('btn-video-call');
     if (btnVoiceCall) {
       btnVoiceCall.addEventListener('click', () => {
         if (this.webrtc && this._activeContactId) {
-          this.webrtc.startCall(this._activeContactId, 'audio');
+          const name = this._activeContact?.displayName || this._activeContact?.username || 'Kullanıcı';
+          this.webrtc.startCall(this._activeContactId, 'audio', name);
         } else {
-          this._showToast('Sesli arama başlatılıyor…', 'info');
+          this._showToast('Sesli arama için kişi seçin', 'info');
         }
       });
     }
     if (btnVideoCall) {
       btnVideoCall.addEventListener('click', () => {
         if (this.webrtc && this._activeContactId) {
-          this.webrtc.startCall(this._activeContactId, 'video');
+          const name = this._activeContact?.displayName || this._activeContact?.username || 'Kullanıcı';
+          this.webrtc.startCall(this._activeContactId, 'video', name);
         } else {
-          this._showToast('Görüntülü arama başlatılıyor…', 'info');
+          this._showToast('Görüntülü arama için kişi seçin', 'info');
         }
       });
     }
 
-    // 6. Tema Değiştirici
+    // 6. Gelen Arama Modalı Butonları (Kabul / Red)
+    const btnAcceptCall = document.getElementById('btn-accept-call');
+    const btnDeclineCall = document.getElementById('btn-decline-call');
+    if (btnAcceptCall) {
+      btnAcceptCall.addEventListener('click', () => {
+        if (this.webrtc && this.webrtc.activeCallId) {
+          this.webrtc.answerCall(this.webrtc.activeCallId);
+        }
+      });
+    }
+    if (btnDeclineCall) {
+      btnDeclineCall.addEventListener('click', () => {
+        if (this.webrtc) {
+          this.webrtc.rejectCall(this.webrtc.activeCallId);
+        }
+      });
+    }
+
+    // 7. Arama Ekranı Kontrolleri (Kapat / Sessize Al / Kamera)
+    const btnEndCall = document.getElementById('btn-end-call');
+    const btnMute = document.getElementById('btn-mute');
+    const btnSpeaker = document.getElementById('btn-speaker');
+    if (btnEndCall) {
+      btnEndCall.addEventListener('click', () => {
+        if (this.webrtc) {
+          this.webrtc.endCall();
+        }
+      });
+    }
+    if (btnMute) {
+      btnMute.addEventListener('click', () => {
+        if (this.webrtc) {
+          const isMuted = this.webrtc.toggleMute();
+          this._showToast(isMuted ? 'Mikrofon kapatıldı' : 'Mikrofon açıldı', 'info');
+        }
+      });
+    }
+    if (btnSpeaker) {
+      btnSpeaker.addEventListener('click', () => {
+        if (this.webrtc) {
+          const isOff = this.webrtc.toggleVideo();
+          this._showToast(isOff ? 'Kamera kapatıldı' : 'Kamera açıldı', 'info');
+        }
+      });
+    }
+
+    // 8. Tema ve Bildirim Ayarları
+    const notifToggle = document.getElementById('notif-toggle');
+    if (notifToggle) {
+      notifToggle.checked = ('Notification' in window) && Notification.permission === 'granted';
+      notifToggle.addEventListener('change', async () => {
+        if (notifToggle.checked && 'Notification' in window) {
+          const res = await Notification.requestPermission();
+          if (res !== 'granted') {
+            notifToggle.checked = false;
+            this._showToast('Bildirim izni verilmedi', 'info');
+          } else {
+            this._showToast('Bildirimler aktif edildi 🔔', 'info');
+          }
+        }
+      });
+    }
+
     const themeToggle = document.getElementById('theme-toggle');
     if (themeToggle) {
       themeToggle.checked = this._theme === 'dark';

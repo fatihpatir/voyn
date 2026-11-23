@@ -161,21 +161,18 @@
     <div class="call-container">
       <div class="call-info">
         <div class="call-avatar" id="call-avatar">
-          <span id="call-avatar-letter">A</span>
+          <span id="call-avatar-letter">?</span>
         </div>
-        <h2 class="call-name" id="call-name">Ahmet Yılmaz</h2>
+        <h2 class="call-name" id="call-name">Arama</h2>
         <p class="call-status" id="call-status">Bağlanıyor…</p>
       </div>
 
       <!-- Video call area -->
       <div class="call-video-area" id="call-video-area" style="display:none">
-        <div class="remote-video" id="remote-video">
-          <div class="video-placeholder">📹</div>
-        </div>
-        <div class="local-video" id="local-video">
-          <div class="video-placeholder-sm">🤳</div>
-        </div>
+        <video id="remote-video" class="remote-video" autoplay playsinline></video>
+        <video id="local-video" class="local-video" autoplay playsinline muted></video>
       </div>
+      <audio id="remote-audio" autoplay playsinline style="display:none"></audio>
 
       <div class="call-controls">
         <button class="call-btn call-btn--mute" id="btn-mute" aria-label="Sesi Kapat">
@@ -324,10 +321,10 @@
   <div class="modal-overlay call-overlay" id="modal-incoming-call" role="dialog" aria-modal="true" aria-label="Gelen Arama">
     <div class="incoming-call-card">
       <div class="incoming-call-avatar" id="incoming-call-avatar">
-        <span id="incoming-call-letter">A</span>
+        <span id="incoming-call-letter">?</span>
         <div class="ring-animation"></div>
       </div>
-      <h3 class="incoming-call-name" id="incoming-call-name">Ahmet Yılmaz</h3>
+      <h3 class="incoming-call-name" id="incoming-call-name">Gelen Arama</h3>
       <p class="incoming-call-type" id="incoming-call-type">Sesli Arama</p>
       <div class="incoming-call-actions">
         <button class="call-action-btn call-action-btn--decline" id="btn-decline-call" aria-label="Reddet">
@@ -353,6 +350,7 @@
 <script src="js/friends.js"></script>
 <script src="js/webrtc.js"></script>
 <script src="js/push.js"></script>
+<script src="js/sound.js"></script>
 <script src="js/app.js"></script>
 
 <script>

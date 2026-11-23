@@ -3,7 +3,7 @@
  * Cache stratejisi, Push bildirimleri, Offline fallback, Background sync
  */
 
-const SW_VERSION = 'v1.0.2';
+const SW_VERSION = 'v1.0.4';
 const CACHE_NAME = `voyn-cache-${SW_VERSION}`;
 const OFFLINE_URL = './offline.html';
 
@@ -20,6 +20,7 @@ const APP_SHELL = [
   './js/friends.js',
   './js/webrtc.js',
   './js/push.js',
+  './js/sound.js',
   './js/app.js',
   './icons/icon.svg',
   './icons/icon-192.png',
@@ -160,7 +161,7 @@ async function navigationHandler(request) {
   }
 
   // Cache'den index.html dene
-  const cached = await caches.match('/index.html');
+  const cached = (await caches.match('./index.html')) || (await caches.match('index.html')) || (await caches.match('/index.html'));
   if (cached) return cached;
 
   // Offline fallback

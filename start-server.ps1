@@ -70,6 +70,9 @@ while ($listener.IsListening) {
             $response.ContentLength64 = $bytes.Length
             $response.AddHeader("Access-Control-Allow-Origin", "*")
             $response.AddHeader("Service-Worker-Allowed", "/")
+            $response.AddHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            $response.AddHeader("Pragma", "no-cache")
+            $response.AddHeader("Expires", "0")
             $response.OutputStream.Write($bytes, 0, $bytes.Length)
             $response.StatusCode = 200
         } else {

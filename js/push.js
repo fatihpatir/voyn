@@ -47,8 +47,7 @@ class VoynPush {
       }
 
       // Service Worker'ı kaydet
-      this.swRegistration = await navigator.serviceWorker.register('/sw.js', {
-        scope: '/',
+      this.swRegistration = await navigator.serviceWorker.register('sw.js', {
         updateViaCache: 'none',
       });
 
